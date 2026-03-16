@@ -1,24 +1,21 @@
-"""AstrBot platform adapter for the OLV desktop-pet frontend."""
-
 from __future__ import annotations
-
+"""AstrBot platform adapter for the OLV desktop-pet frontend."""
 import asyncio
+from pathlib import Path
+
+from astrbot.api.platform import Platform, AstrBotMessage, MessageMember, PlatformMetadata, MessageType
+from astrbot.api.message_components import Plain, Image, Record # 消息链中的组件，可以根据需要导入
+from astrbot.core.platform.astr_message_event import MessageSesion
+from astrbot.api.platform import register_platform_adapter
+from astrbot import logger
+
+
+
+
 import json
+import traceback
 from typing import Any
 from uuid import uuid4
-
-from astrbot import logger
-from astrbot.api.message_components import Image, Plain, Record
-from astrbot.api.platform import (
-    AstrBotMessage,
-    MessageMember,
-    MessageType,
-    Platform,
-    PlatformMetadata,
-    register_platform_adapter,
-)
-from astrbot.core.platform.astr_message_event import MessageSesion
-
 
 from .adapter.expression_mapper import RuleBasedExpressionMapper
 from .adapter.payload_builder import (
@@ -33,6 +30,11 @@ from .adapter.payload_builder import (
 from .adapter.protocol import ProtocolError, normalize_inbound_message
 from .adapter.session_state import SessionState
 from .platform_event import OLVPetPlatformEvent
+from .static_resources import StaticResourceServer
+
+PLUGIN_DIR = Path(__file__).resolve().parent
+LIVE2DS_DIR = PLUGIN_DIR / "live2ds"
+OLV_DIR = PLUGIN_DIR / "olv"
 
 
 @register_platform_adapter(
@@ -41,6 +43,7 @@ from .platform_event import OLVPetPlatformEvent
     default_config_tmpl={
         "host": "127.0.0.1",
         "port": 12396,
+        "http_port": 12397,
         "conf_name": "AstrBot Desktop",
         "conf_uid": "astrbot-desktop",
         "speaker_name": "AstrBot",
@@ -51,20 +54,24 @@ from .platform_event import OLVPetPlatformEvent
 class OLVPetPlatformAdapter(Platform):
     """Platform adapter that accepts OLV websocket messages and emits AstrBot events."""
 
-    def __init__(self, platform_config: Any, platform_settings: dict[str, Any], event_queue: Any):
-        super().__init__(event_queue)
+    def __init__(self, platform_config: dict, platform_settings: dict, event_queue: asyncio.Queue) -> None:
+        super().__init__(platform_config, event_queue)
+        logger.info("OLVPetPlatformAdapter super().__init__ completed")
         self.config = platform_config
         self.settings = platform_settings or {}
 
         self.host = _config_get(self.config, "host", "127.0.0.1")
         self.port = int(_config_get(self.config, "port", 12396))
+        self.http_port = int(_config_get(self.config, "http_port", 12397))
         self.client_uid = "desktop-client"
         self.conf_name = _config_get(self.config, "conf_name", "AstrBot Desktop")
         self.conf_uid = _config_get(self.config, "conf_uid", "astrbot-desktop")
         self.speaker_name = _config_get(self.config, "speaker_name", "AstrBot")
         self.auto_start_mic = bool(_config_get(self.config, "auto_start_mic", True))
         self.model_info = _parse_model_info(
-            _config_get(self.config, "model_info_json", "{}")
+            _config_get(self.config, "model_info_json", "{}"),
+            host=self.host,
+            http_port=self.http_port,
         )
 
         self.session_state = SessionState(client_uid=self.client_uid)
@@ -72,23 +79,54 @@ class OLVPetPlatformAdapter(Platform):
 
         self._ws_server = None
         self._ws_client = None
+        self._static_server = StaticResourceServer(
+            host=self.host,
+            port=self.http_port,
+            routes=_build_static_routes(),
+        )
         self._turn_lock = asyncio.Lock()
         self._history_uid = str(uuid4())
 
+        logger.info(
+            "OLVPetPlatformAdapter initialized "
+            f"(host={self.host}, port={self.port}, http_port={self.http_port}, "
+            f"conf_name={self.conf_name}, conf_uid={self.conf_uid})"
+        )
+
     def meta(self) -> PlatformMetadata:
-        return PlatformMetadata("olv_pet_adapter", "OLV Pet Adapter")
+        return PlatformMetadata(
+            name="olv_pet_adapter",
+            description="OLV Pet Adapter",
+            id="olv_pet_adapter",
+        )
 
     async def run(self):
-        import websockets  # type: ignore
+        logger.info("OLV Pet Adapter entering run()")
+        try:
+            import websockets  # type: ignore
 
-        self._ws_server = await websockets.serve(
-            self._handle_client,
-            self.host,
-            self.port,
-            max_size=16 * 1024 * 1024,
-        )
-        logger.info(f"OLV Pet Adapter websocket listening on ws://{self.host}:{self.port}")
-        await self._ws_server.wait_closed()
+            logger.info("OLV Pet Adapter imported `websockets` successfully")
+            self._static_server.start()
+            logger.info(
+                f"OLV Pet Adapter starting websocket server on ws://{self.host}:{self.port}"
+            )
+
+            self._ws_server = await websockets.serve(
+                self._handle_client,
+                self.host,
+                self.port,
+                max_size=16 * 1024 * 1024,
+            )
+            logger.info(f"OLV Pet Adapter websocket listening on ws://{self.host}:{self.port}")
+            await self._ws_server.wait_closed()
+        except asyncio.CancelledError:
+            logger.info("OLV Pet Adapter run() cancelled, shutting down websocket server")
+            await self.terminate()
+            raise
+        except Exception as exc:
+            logger.error(f"OLV Pet Adapter failed during run(): {exc}")
+            logger.error(traceback.format_exc())
+            raise
 
     async def send_by_session(self, session: MessageSesion, message_chain):
         await super().send_by_session(session, message_chain)
@@ -251,7 +289,7 @@ class OLVPetPlatformAdapter(Platform):
         msg_type = message.get("type")
 
         if msg_type == "fetch-backgrounds":
-            await self._send_json({"type": "background-files", "files": []})
+            await self._send_json({"type": "background-files", "files": _list_background_files()})
         elif msg_type == "fetch-configs":
             await self._send_json({"type": "config-files", "configs": []})
         elif msg_type == "fetch-history-list":
@@ -289,6 +327,32 @@ class OLVPetPlatformAdapter(Platform):
             )
         elif msg_type == "heartbeat":
             await self._send_json({"type": "heartbeat-ack"})
+
+    async def terminate(self) -> None:
+        logger.info("OLV Pet Adapter terminate() called")
+
+        if self._ws_client is not None:
+            try:
+                await self._ws_client.close()
+            except Exception as exc:
+                logger.warning(f"Failed to close desktop websocket client cleanly: {exc}")
+            finally:
+                self._ws_client = None
+
+        if self._ws_server is not None:
+            try:
+                self._ws_server.close()
+                await self._ws_server.wait_closed()
+            except Exception as exc:
+                logger.warning(f"Failed to close websocket server cleanly: {exc}")
+            finally:
+                self._ws_server = None
+
+        if self._static_server is not None:
+            try:
+                self._static_server.stop()
+            except Exception as exc:
+                logger.warning(f"Failed to close static resource server cleanly: {exc}")
 
     async def _finalize_turn(self) -> None:
         if not self.session_state.waiting_for_playback_complete:
@@ -343,12 +407,56 @@ def _config_get(config: Any, key: str, default: Any) -> Any:
     return default
 
 
-def _parse_model_info(raw_model_info: Any) -> dict[str, Any]:
+def _parse_model_info(raw_model_info: Any, host: str, http_port: int) -> dict[str, Any]:
+    base_url = f"http://{host}:{http_port}"
+
     if isinstance(raw_model_info, dict):
-        return raw_model_info
+        return _normalize_model_info(raw_model_info, base_url)
     if isinstance(raw_model_info, str):
         try:
-            return json.loads(raw_model_info)
+            parsed = json.loads(raw_model_info)
+            if parsed:
+                return _normalize_model_info(parsed, base_url)
         except json.JSONDecodeError:
             logger.warning("Invalid `model_info_json`, falling back to empty object.")
+    model_dict_path = LIVE2DS_DIR / "model_dict.json"
+    if model_dict_path.exists():
+        try:
+            data = json.loads(model_dict_path.read_text(encoding="utf-8"))
+            if isinstance(data, list) and data:
+                first = data[0]
+                if isinstance(first, dict):
+                    return _normalize_model_info(first, base_url)
+        except Exception as exc:
+            logger.warning(f"Failed to load default model info from live2ds/model_dict.json: {exc}")
     return {}
+
+
+def _normalize_model_info(model_info: dict[str, Any], base_url: str) -> dict[str, Any]:
+    normalized = dict(model_info)
+    url = normalized.get("url")
+    if isinstance(url, str) and url.startswith("/"):
+        normalized["url"] = f"{base_url}{url}"
+    return normalized
+
+
+def _build_static_routes() -> dict[str, Path]:
+    return {
+        "/live2ds": LIVE2DS_DIR,
+        "/bg": OLV_DIR / "backgrounds",
+        "/avatars": OLV_DIR / "avatars",
+        "/cache": OLV_DIR / "cache",
+    }
+
+
+def _list_background_files() -> list[str]:
+    bg_dir = OLV_DIR / "backgrounds"
+    if not bg_dir.exists():
+        return []
+    return sorted(
+        [
+            entry.name
+            for entry in bg_dir.iterdir()
+            if entry.is_file() and entry.name.lower() != "readme.md"
+        ]
+    )

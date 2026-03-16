@@ -26,7 +26,7 @@ __pycache__/
 *.pyc
 lab.py
 .idea
-
+live2ds
 # Virtual environment
 .venv
 .conda
