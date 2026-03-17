@@ -2,6 +2,7 @@ from __future__ import annotations
 """AstrBot platform adapter for the OLV desktop-pet frontend."""
 import asyncio
 from pathlib import Path
+import numpy as np
 
 from astrbot.api.platform import Platform, AstrBotMessage, MessageMember, PlatformMetadata, MessageType
 from astrbot.api.message_components import Plain, Image, Record # 消息链中的组件，可以根据需要导入
@@ -18,6 +19,7 @@ from typing import Any
 from uuid import uuid4
 
 from .adapter.expression_mapper import RuleBasedExpressionMapper
+from .adapter.audio_runtime import create_vad_engine
 from .adapter.payload_builder import (
     build_audio_payload,
     build_backend_synth_complete,
@@ -28,6 +30,7 @@ from .adapter.payload_builder import (
     build_set_model_and_conf,
 )
 from .adapter.protocol import ProtocolError, normalize_inbound_message
+from .adapter.remote_whisper_asr import RemoteOpenAIWhisperASR
 from .adapter.session_state import SessionState
 from .platform_event import OLVPetPlatformEvent
 from .static_resources import StaticResourceServer
@@ -49,6 +52,19 @@ OLV_DIR = PLUGIN_DIR / "olv"
         "speaker_name": "AstrBot",
         "model_info_json": "{}",
         "auto_start_mic": True,
+        "remote_stt_url": "http://192.168.5.14:8000/stt",
+        "remote_whisper_base_url": "http://192.168.5.14:8000/stt",
+        "remote_whisper_model": "",
+        "remote_whisper_api_key": "",
+        "remote_whisper_language": "",
+        "remote_whisper_prompt": "",
+        "remote_whisper_timeout": 120,
+        "vad_model": "silero_vad",
+        "vad_prob_threshold": 0.4,
+        "vad_db_threshold": 60,
+        "vad_required_hits": 3,
+        "vad_required_misses": 24,
+        "vad_smoothing_window": 5,
     },
 )
 class OLVPetPlatformAdapter(Platform):
@@ -68,6 +84,26 @@ class OLVPetPlatformAdapter(Platform):
         self.conf_uid = _config_get(self.config, "conf_uid", "astrbot-desktop")
         self.speaker_name = _config_get(self.config, "speaker_name", "AstrBot")
         self.auto_start_mic = bool(_config_get(self.config, "auto_start_mic", True))
+        self.remote_stt_url = _config_get(
+            self.config,
+            "remote_stt_url",
+            _config_get(self.config, "remote_whisper_base_url", "http://192.168.5.14:8000/stt"),
+        )
+        self.remote_whisper_model = _config_get(self.config, "remote_whisper_model", "")
+        self.remote_whisper_api_key = _config_get(self.config, "remote_whisper_api_key", "")
+        self.remote_whisper_language = _config_get(self.config, "remote_whisper_language", "")
+        self.remote_whisper_prompt = _config_get(self.config, "remote_whisper_prompt", "")
+        self.remote_whisper_timeout = float(_config_get(self.config, "remote_whisper_timeout", 120))
+        self.vad_model = _config_get(self.config, "vad_model", "silero_vad")
+        self.vad_config = {
+            "orig_sr": 16000,
+            "target_sr": 16000,
+            "prob_threshold": float(_config_get(self.config, "vad_prob_threshold", 0.4)),
+            "db_threshold": int(_config_get(self.config, "vad_db_threshold", 60)),
+            "required_hits": int(_config_get(self.config, "vad_required_hits", 3)),
+            "required_misses": int(_config_get(self.config, "vad_required_misses", 24)),
+            "smoothing_window": int(_config_get(self.config, "vad_smoothing_window", 5)),
+        }
         self.model_info = _parse_model_info(
             _config_get(self.config, "model_info_json", "{}"),
             host=self.host,
@@ -86,6 +122,17 @@ class OLVPetPlatformAdapter(Platform):
         )
         self._turn_lock = asyncio.Lock()
         self._history_uid = str(uuid4())
+        self._audio_buffer = np.array([], dtype=np.float32)
+        self._audio_buffer_lock = asyncio.Lock()
+        self._vad_engine = None
+        self._whisper_asr = RemoteOpenAIWhisperASR(
+            endpoint_url=self.remote_stt_url,
+            model=self.remote_whisper_model,
+            api_key=self.remote_whisper_api_key,
+            language=self.remote_whisper_language,
+            prompt=self.remote_whisper_prompt,
+            timeout=self.remote_whisper_timeout,
+        )
 
         logger.info(
             "OLVPetPlatformAdapter initialized "
@@ -133,18 +180,31 @@ class OLVPetPlatformAdapter(Platform):
 
     def convert_message(self, data: dict[str, Any]) -> AstrBotMessage:
         inbound = normalize_inbound_message(data)
+        return self._build_message_object(
+            text=inbound.payload.text,
+            raw_message=data,
+            images=inbound.payload.images,
+        )
+
+    def _build_message_object(
+        self,
+        text: str,
+        raw_message: dict[str, Any],
+        images: list[Any] | None = None,
+    ) -> AstrBotMessage:
+        images = images or []
 
         abm = AstrBotMessage()
         abm.type = MessageType.FRIEND_MESSAGE
         abm.self_id = "olv_pet_adapter"
         abm.session_id = self.client_uid
         abm.message_id = str(uuid4())
-        abm.message_str = inbound.payload.text
-        abm.raw_message = data
+        abm.message_str = text
+        abm.raw_message = raw_message
         abm.sender = MessageMember(user_id=self.client_uid, nickname="DesktopUser")
-        abm.message = [Plain(text=inbound.payload.text)]
+        abm.message = [Plain(text=text)]
 
-        for image_payload in inbound.payload.images:
+        for image_payload in images:
             image_component = self._convert_image_component(image_payload)
             if image_component is not None:
                 abm.message.append(image_component)
@@ -173,12 +233,27 @@ class OLVPetPlatformAdapter(Platform):
             await self._finalize_turn()
             return
 
+        if msg_type == "mic-audio-data":
+            await self._handle_audio_data(message)
+            return
+
+        if msg_type == "raw-audio-data":
+            await self._handle_raw_audio_data(message)
+            return
+
+        if msg_type == "mic-audio-end":
+            await self._handle_audio_end(message)
+            return
+
         try:
             message_obj = self.convert_message(message)
         except ProtocolError as exc:
             logger.debug(f"Ignoring unsupported OLV message: {exc}")
             return
 
+        await self._commit_inbound_message(message_obj)
+
+    async def _commit_inbound_message(self, message_obj: AstrBotMessage) -> None:
         async with self._turn_lock:
             if self.session_state.waiting_for_playback_complete:
                 await self._finalize_turn()
@@ -194,6 +269,78 @@ class OLVPetPlatformAdapter(Platform):
                 self,
             )
             self.commit_event(event)
+
+    async def _handle_audio_data(self, message: dict[str, Any]) -> None:
+        audio_data = message.get("audio", [])
+        if not isinstance(audio_data, list) or not audio_data:
+            return
+
+        chunk = np.array(audio_data, dtype=np.float32)
+        async with self._audio_buffer_lock:
+            self._audio_buffer = np.append(self._audio_buffer, chunk)
+
+    async def _handle_raw_audio_data(self, message: dict[str, Any]) -> None:
+        audio_data = message.get("audio", [])
+        if not isinstance(audio_data, list) or not audio_data:
+            return
+
+        try:
+            vad_engine = self._ensure_vad_engine()
+        except Exception as exc:
+            logger.error(f"Failed to initialize VAD engine: {exc}")
+            await self._send_json(build_error(f"VAD unavailable: {exc}"))
+            return
+
+        for audio_bytes in vad_engine.detect_speech(audio_data):
+            if audio_bytes == b"<|PAUSE|>":
+                await self._send_json(build_control("interrupt"))
+            elif audio_bytes == b"<|RESUME|>":
+                continue
+            elif len(audio_bytes) > 1024:
+                chunk = (
+                    np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+                )
+                async with self._audio_buffer_lock:
+                    self._audio_buffer = np.append(self._audio_buffer, chunk)
+                await self._send_json(build_control("mic-audio-end"))
+
+    async def _handle_audio_end(self, message: dict[str, Any]) -> None:
+        async with self._audio_buffer_lock:
+            audio_buffer = self._audio_buffer.copy()
+            self._audio_buffer = np.array([], dtype=np.float32)
+
+        if audio_buffer.size == 0:
+            logger.debug("Ignoring `mic-audio-end` with empty buffer.")
+            return
+
+        try:
+            text = (await self._whisper_asr.async_transcribe_np(audio_buffer)).strip()
+        except Exception as exc:
+            logger.error(f"Audio transcription failed: {exc}")
+            await self._send_json(build_error(f"Audio transcription failed: {exc}"))
+            return
+
+        if not text:
+            await self._send_json(build_error("The LLM can't hear you."))
+            return
+
+        await self._send_json({"type": "user-input-transcription", "text": text})
+
+        raw_message = dict(message)
+        raw_message["transcription"] = text
+        raw_message["audio_sample_count"] = int(audio_buffer.size)
+        message_obj = self._build_message_object(text=text, raw_message=raw_message)
+        await self._commit_inbound_message(message_obj)
+
+    def _ensure_vad_engine(self):
+        if self._vad_engine is not None:
+            return self._vad_engine
+        self._vad_engine = create_vad_engine(
+            olv_dir=OLV_DIR,
+            engine_type=self.vad_model,
+            kwargs=self.vad_config,
+        )
+        return self._vad_engine
 
     async def _handle_client(self, websocket):
         if self._ws_client is not None:
@@ -217,6 +364,7 @@ class OLVPetPlatformAdapter(Platform):
         finally:
             self._ws_client = None
             self.session_state.reset_to_idle()
+            self._audio_buffer = np.array([], dtype=np.float32)
             logger.info("Desktop frontend disconnected from OLV Pet Adapter.")
 
     async def emit_message_chain(
@@ -369,7 +517,11 @@ class OLVPetPlatformAdapter(Platform):
     @staticmethod
     def _convert_image_component(image_payload: Any):
         if isinstance(image_payload, str) and image_payload:
-            return Image.fromURL(url=image_payload)
+            if image_payload.startswith("http://") or image_payload.startswith("https://"):
+                return Image.fromURL(url=image_payload)
+            if image_payload.startswith("data:"):
+                return _image_from_data_uri(image_payload)
+            return None
 
         if not isinstance(image_payload, dict):
             return None
@@ -380,8 +532,8 @@ class OLVPetPlatformAdapter(Platform):
             if data.startswith("http://") or data.startswith("https://"):
                 return Image.fromURL(url=data)
             if data.startswith("data:"):
-                return Image(file=data)
-            return Image(file=f"data:{mime_type};base64,{data}")
+                return _image_from_data_uri(data)
+            return Image.fromBase64(base64=data)
         return None
 
 
@@ -405,6 +557,15 @@ def _config_get(config: Any, key: str, default: Any) -> Any:
         value = getattr(config, key)
         return default if value is None else value
     return default
+
+
+def _image_from_data_uri(data_uri: str):
+    if ";base64," not in data_uri:
+        return None
+    _, bs64_data = data_uri.split(";base64,", 1)
+    if not bs64_data:
+        return None
+    return Image.fromBase64(base64=bs64_data)
 
 
 def _parse_model_info(raw_model_info: Any, host: str, http_port: int) -> dict[str, Any]:
