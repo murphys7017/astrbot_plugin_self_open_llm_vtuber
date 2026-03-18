@@ -81,31 +81,12 @@ class OLVPetPlatformAdapter(Platform):
         self.speaker_name = _config_get(self.config, "speaker_name", "AstrBot")
         self.auto_start_mic = bool(_config_get(self.config, "auto_start_mic", True))
         self._plugin_config = get_plugin_config() or {}
-        self.stt_provider_id = _plugin_config_get(self._plugin_config, "stt_provider_id", "")
-        self.expression_provider_id = _plugin_config_get(
-            self._plugin_config, "expression_provider_id", ""
-        )
-        self.vad_model = _plugin_config_get(
-            self._plugin_config, "vad_model", "silero_vad"
-        )
-        self.vad_config = {
-            "orig_sr": 16000,
-            "target_sr": 16000,
-            "prob_threshold": float(_plugin_config_get(self._plugin_config, "vad_prob_threshold", 0.4)),
-            "db_threshold": int(_plugin_config_get(self._plugin_config, "vad_db_threshold", 60)),
-            "required_hits": int(_plugin_config_get(self._plugin_config, "vad_required_hits", 3)),
-            "required_misses": int(_plugin_config_get(self._plugin_config, "vad_required_misses", 24)),
-            "smoothing_window": int(_plugin_config_get(self._plugin_config, "vad_smoothing_window", 5)),
-        }
-        self.live2d_model_name = _plugin_config_get(
-            self._plugin_config, "live2d_model_name", ""
-        )
-        self.model_info = _parse_model_info(
-            _config_get(self.config, "model_info_json", "{}"),
-            host=self.host,
-            http_port=self.http_port,
-            selected_model_name=self.live2d_model_name,
-        )
+        self.stt_provider_id = ""
+        self.expression_provider_id = ""
+        self.vad_model = "silero_vad"
+        self.vad_config: dict[str, Any] = {}
+        self.live2d_model_name = ""
+        self.model_info: dict[str, Any] = {}
 
         self.session_state = SessionState(client_uid=self.client_uid)
         self.expression_mapper = RuleBasedExpressionMapper()
@@ -126,6 +107,7 @@ class OLVPetPlatformAdapter(Platform):
         self._default_persona: dict[str, Any] | None = None
         self._selected_stt_provider: STTProvider | None = None
         self._selected_expression_provider: Provider | None = None
+        self._last_sent_model_signature: str | None = None
         self.chat_buffer = ChatBuffer(
             maxlen=int(_plugin_config_get(self._plugin_config, "chat_buffer_size", 10))
         )
@@ -135,6 +117,7 @@ class OLVPetPlatformAdapter(Platform):
             f"(host={self.host}, port={self.port}, http_port={self.http_port}, "
             f"conf_name={self.conf_name}, conf_uid={self.conf_uid})"
         )
+        self._refresh_runtime_settings()
 
     def meta(self) -> PlatformMetadata:
         return PlatformMetadata(
@@ -149,8 +132,10 @@ class OLVPetPlatformAdapter(Platform):
             import websockets  # type: ignore
 
             logger.info("OLV Pet Adapter imported `websockets` successfully")
-            await self._load_default_persona()
-            self._load_selected_providers()
+            await self._refresh_runtime_settings_async(
+                reload_persona=True,
+                reload_providers=True,
+            )
             self._static_server.start()
             logger.info(
                 f"OLV Pet Adapter starting websocket server on ws://{self.host}:{self.port}"
@@ -253,6 +238,8 @@ class OLVPetPlatformAdapter(Platform):
 
     async def _commit_inbound_message(self, message_obj: AstrBotMessage) -> None:
         async with self._turn_lock:
+            self._refresh_runtime_settings()
+            await self._send_current_model_and_conf()
             if self.session_state.waiting_for_playback_complete:
                 await self._finalize_turn()
 
@@ -436,15 +423,12 @@ class OLVPetPlatformAdapter(Platform):
             await self._send_json(build_control("conversation-chain-end"))
 
     async def _send_initial_messages(self) -> None:
-        await self._send_json(build_full_text("Connection established"))
-        await self._send_json(
-            build_set_model_and_conf(
-                model_info=self.model_info,
-                conf_name=self.conf_name,
-                conf_uid=self.conf_uid,
-                client_uid=self.client_uid,
-            )
+        await self._refresh_runtime_settings_async(
+            reload_persona=True,
+            reload_providers=True,
         )
+        await self._send_json(build_full_text("Connection established"))
+        await self._send_current_model_and_conf(force=True)
         await self._send_json({"type": "group-update", "members": [], "is_owner": False})
         if self.auto_start_mic:
             await self._send_json(build_control("start-mic"))
@@ -486,6 +470,80 @@ class OLVPetPlatformAdapter(Platform):
             "custom_error_message": persona.get("custom_error_message"),
         }
         logger.info(f"Loaded default persona: {self._default_persona['name']}")
+
+    def _refresh_runtime_settings(self) -> None:
+        latest_plugin_config = get_plugin_config()
+        if latest_plugin_config is not None:
+            self._plugin_config = latest_plugin_config
+
+        previous_vad_model = self.vad_model
+        previous_vad_config = dict(self.vad_config)
+
+        self.stt_provider_id = _plugin_config_get(self._plugin_config, "stt_provider_id", "")
+        self.expression_provider_id = _plugin_config_get(
+            self._plugin_config, "expression_provider_id", ""
+        )
+        self.vad_model = _plugin_config_get(
+            self._plugin_config, "vad_model", "silero_vad"
+        )
+        self.vad_config = {
+            "orig_sr": 16000,
+            "target_sr": 16000,
+            "prob_threshold": float(_plugin_config_get(self._plugin_config, "vad_prob_threshold", 0.4)),
+            "db_threshold": int(_plugin_config_get(self._plugin_config, "vad_db_threshold", 60)),
+            "required_hits": int(_plugin_config_get(self._plugin_config, "vad_required_hits", 3)),
+            "required_misses": int(_plugin_config_get(self._plugin_config, "vad_required_misses", 24)),
+            "smoothing_window": int(_plugin_config_get(self._plugin_config, "vad_smoothing_window", 5)),
+        }
+        self.live2d_model_name = _plugin_config_get(
+            self._plugin_config, "live2d_model_name", ""
+        )
+        self.model_info = _parse_model_info(
+            _config_get(self.config, "model_info_json", "{}"),
+            host=self.host,
+            http_port=self.http_port,
+            selected_model_name=self.live2d_model_name,
+        )
+
+        if self._vad_engine is not None and (
+            self.vad_model != previous_vad_model or self.vad_config != previous_vad_config
+        ):
+            self._vad_engine = None
+
+        logger.info(
+            "Refreshed plugin runtime settings "
+            f"(live2d_model_name={self.live2d_model_name or '<default>'}, "
+            f"model_url={self.model_info.get('url', '<missing>')})"
+        )
+
+    async def _refresh_runtime_settings_async(
+        self,
+        *,
+        reload_persona: bool = False,
+        reload_providers: bool = False,
+    ) -> None:
+        self._refresh_runtime_settings()
+
+        if reload_persona:
+            await self._load_default_persona()
+
+        if reload_providers:
+            self._selected_stt_provider = None
+            self._selected_expression_provider = None
+            self._load_selected_providers()
+
+    async def _send_current_model_and_conf(self, *, force: bool = False) -> None:
+        payload = build_set_model_and_conf(
+            model_info=self.model_info,
+            conf_name=self.conf_name,
+            conf_uid=self.conf_uid,
+            client_uid=self.client_uid,
+        )
+        signature = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+        if not force and signature == self._last_sent_model_signature:
+            return
+        await self._send_json(payload)
+        self._last_sent_model_signature = signature
 
     def _load_selected_providers(self) -> None:
         if self._plugin_context is None:
@@ -609,14 +667,8 @@ class OLVPetPlatformAdapter(Platform):
                 }
             )
         elif msg_type == "request-init-config":
-            await self._send_json(
-                build_set_model_and_conf(
-                    model_info=self.model_info,
-                    conf_name=self.conf_name,
-                    conf_uid=self.conf_uid,
-                    client_uid=self.client_uid,
-                )
-            )
+            self._refresh_runtime_settings()
+            await self._send_current_model_and_conf(force=True)
         elif msg_type == "heartbeat":
             await self._send_json({"type": "heartbeat-ack"})
 
