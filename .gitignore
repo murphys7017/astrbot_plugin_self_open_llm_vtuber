@@ -49,6 +49,7 @@ logs/*
 cache/*
 olv/models/
 olv/cache/audio
+olv/cache/images
 src/open_llm_vtuber/tts/asset
 src/open_llm_vtuber/tts/config
 src/open_llm_vtuber/asr/models*

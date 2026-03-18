@@ -88,23 +88,46 @@ def build_base_expression_prompt(
     emotion_map_keys: list[str],
 ) -> str:
     persona_payload = persona or {}
-    payload = {
-        "persona": {
-            "name": persona_payload.get("name", "default"),
-            "prompt": persona_payload.get("prompt", ""),
-            "begin_dialogs": persona_payload.get("begin_dialogs", []),
-            "custom_error_message": persona_payload.get("custom_error_message"),
-        },
-        "recent_context": chatbuffer[-10:],
-        "user_input": user_input,
-        "reply_text": reply_text,
-        "emotion_map_keys": emotion_map_keys,
-        "output_schema_hint": {
-            "semantic_expression": "string",
-            "base_expression": "string, must be one of emotion_map_keys",
-        },
-    }
-    return json.dumps(payload, ensure_ascii=False, indent=2)
+    persona_name = _stringify_text(persona_payload.get("name")) or "default"
+    persona_prompt = _stringify_text(persona_payload.get("prompt"))
+    begin_dialogs = _collect_text_messages(persona_payload.get("begin_dialogs"))
+    custom_error_message = _stringify_text(
+        persona_payload.get("custom_error_message")
+    )
+
+    recent_context_lines: list[str] = []
+    for item in chatbuffer[-10:]:
+        role = _stringify_text(item.get("role")) or "unknown"
+        text = _stringify_text(item.get("text"))
+        if text:
+            recent_context_lines.append(f"{role}: {text}")
+
+    prompt_sections = [
+        "请根据以下纯文本信息，为 Live2D 角色选择最合适的基础表情。",
+        f"可选的 base_expression 仅限以下值：{', '.join(emotion_map_keys)}",
+        f"人格名称：{persona_name}",
+    ]
+
+    if persona_prompt:
+        prompt_sections.append(f"人格设定：\n{persona_prompt}")
+    if begin_dialogs:
+        prompt_sections.append(
+            "人格开场对白（仅保留文本消息）：\n"
+            + "\n".join(f"- {line}" for line in begin_dialogs)
+        )
+    if custom_error_message:
+        prompt_sections.append(f"人格错误回复：\n{custom_error_message}")
+    if recent_context_lines:
+        prompt_sections.append(
+            "最近对话（仅保留文本消息）：\n" + "\n".join(recent_context_lines)
+        )
+
+    prompt_sections.append(f"用户最新输入：\n{_stringify_text(user_input) or '(空)'}")
+    prompt_sections.append(f"助手当前回复：\n{_stringify_text(reply_text) or '(空)'}")
+    prompt_sections.append(
+        '请只输出 JSON，格式为：{"semantic_expression":"...","base_expression":"...","reason":"..."}'
+    )
+    return "\n\n".join(prompt_sections)
 
 
 def validate_base_expression_decision(
@@ -144,6 +167,36 @@ def build_fallback_base_expression_decision(
         base_expression=base_expression,
         reason="fallback to neutral",
     )
+
+
+def _collect_text_messages(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, (int, float, bool)):
+        return [str(value)]
+    if isinstance(value, list):
+        messages: list[str] = []
+        for item in value:
+            messages.extend(_collect_text_messages(item))
+        return messages
+    if isinstance(value, dict):
+        messages: list[str] = []
+        if "text" in value:
+            messages.extend(_collect_text_messages(value.get("text")))
+        elif "content" in value:
+            messages.extend(_collect_text_messages(value.get("content")))
+        elif "prompt" in value:
+            messages.extend(_collect_text_messages(value.get("prompt")))
+        return messages
+    return []
+
+
+def _stringify_text(value: Any) -> str:
+    messages = _collect_text_messages(value)
+    return "\n".join(messages).strip()
 
 
 def _load_json_payload(raw_text: str) -> Any:

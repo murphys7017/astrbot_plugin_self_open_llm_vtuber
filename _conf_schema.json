@@ -27,7 +27,7 @@
     "_special": "select_provider_stt"
   },
   "expression_provider_id": {
-    "description": "用于基础情绪和基础表情判断的聊天模型 Provider。",
+    "description": "用于基础情绪和基础表情判断的聊天模型 Provider，仅接收文本消息。",
     "type": "string",
     "default": "",
     "_special": "select_provider"

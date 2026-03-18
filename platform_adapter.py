@@ -1,8 +1,11 @@
 from __future__ import annotations
 """AstrBot platform adapter for the OLV desktop-pet frontend."""
 import asyncio
+import base64
+import mimetypes
 import os
 from pathlib import Path
+import re
 import time
 import numpy as np
 
@@ -46,6 +49,7 @@ PLUGIN_DIR = Path(__file__).resolve().parent
 LIVE2DS_DIR = PLUGIN_DIR / "live2ds"
 OLV_DIR = PLUGIN_DIR / "olv"
 AUDIO_CACHE_DIR = OLV_DIR / "cache" / "audio"
+IMAGE_CACHE_DIR = OLV_DIR / "cache" / "images"
 AUDIO_CACHE_MAX_FILES = 120
 AUDIO_CACHE_MAX_AGE_SECONDS = 6 * 60 * 60
 AUDIO_CACHE_TRIM_PROTECTION_SECONDS = 10 * 60
@@ -186,14 +190,27 @@ class OLVPetPlatformAdapter(Platform):
         abm.session_id = self.client_uid
         abm.message_id = str(uuid4())
         abm.message_str = text
-        abm.raw_message = raw_message
         abm.sender = MessageMember(user_id=self.client_uid, nickname="DesktopUser")
         abm.message = [Plain(text=text)]
+        normalized_raw_message = dict(raw_message)
+        resolved_image_inputs: list[dict[str, str]] = []
 
         for image_payload in images:
             image_component = self._convert_image_component(image_payload)
             if image_component is not None:
                 abm.message.append(image_component)
+                image_ref = (
+                    (getattr(image_component, "file", "") or "").strip()
+                    or (getattr(image_component, "url", "") or "").strip()
+                )
+                if image_ref:
+                    resolved_image_inputs.append(
+                        {"type": "input_image", "image_url": image_ref}
+                    )
+
+        if resolved_image_inputs:
+            normalized_raw_message["resolved_images"] = resolved_image_inputs
+        abm.raw_message = normalized_raw_message
 
         return abm
 
@@ -827,10 +844,11 @@ class OLVPetPlatformAdapter(Platform):
     @staticmethod
     def _convert_image_component(image_payload: Any):
         if isinstance(image_payload, str) and image_payload:
+            local_path = _save_frontend_image_payload_to_local_path(image_payload)
+            if local_path:
+                return Image.fromFileSystem(path=local_path)
             if image_payload.startswith("http://") or image_payload.startswith("https://"):
                 return Image.fromURL(url=image_payload)
-            if image_payload.startswith("data:"):
-                return _image_from_data_uri(image_payload)
             return None
 
         if not isinstance(image_payload, dict):
@@ -839,11 +857,14 @@ class OLVPetPlatformAdapter(Platform):
         data = image_payload.get("data")
         mime_type = image_payload.get("mime_type", "image/png")
         if isinstance(data, str) and data:
+            local_path = _save_frontend_image_payload_to_local_path(
+                data,
+                mime_type=mime_type,
+            )
+            if local_path:
+                return Image.fromFileSystem(path=local_path)
             if data.startswith("http://") or data.startswith("https://"):
                 return Image.fromURL(url=data)
-            if data.startswith("data:"):
-                return _image_from_data_uri(data)
-            return Image.fromBase64(base64=data)
         return None
 
 
@@ -952,6 +973,69 @@ def _image_from_data_uri(data_uri: str):
     if not bs64_data:
         return None
     return Image.fromBase64(base64=bs64_data)
+
+
+def _save_frontend_image_payload_to_local_path(
+    image_payload: str,
+    *,
+    mime_type: str | None = None,
+) -> str | None:
+    payload = (image_payload or "").strip()
+    if not payload:
+        return None
+
+    if payload.startswith("file:///"):
+        return payload.replace("file:///", "", 1)
+
+    if os.path.exists(payload):
+        return os.path.abspath(payload)
+
+    if payload.startswith("http://") or payload.startswith("https://"):
+        return None
+
+    image_bytes: bytes | None = None
+    resolved_mime_type = mime_type or "image/png"
+
+    if payload.startswith("data:"):
+        data_match = re.match(
+            r"^data:(?P<mime>[\w.+-]+/[\w.+-]+);base64,(?P<data>.+)$",
+            payload,
+            re.DOTALL,
+        )
+        if not data_match:
+            logger.warning("Unsupported frontend image data URI, skip saving image.")
+            return None
+        resolved_mime_type = data_match.group("mime") or resolved_mime_type
+        try:
+            image_bytes = base64.b64decode(data_match.group("data"))
+        except Exception as exc:
+            logger.warning(f"Failed to decode frontend image data URI: {exc}")
+            return None
+    else:
+        compact_payload = payload
+        if compact_payload.startswith("base64://"):
+            compact_payload = compact_payload.removeprefix("base64://")
+        try:
+            image_bytes = base64.b64decode(compact_payload)
+        except Exception:
+            return None
+
+    return _write_frontend_image_bytes(image_bytes, resolved_mime_type)
+
+
+def _write_frontend_image_bytes(image_bytes: bytes | None, mime_type: str) -> str | None:
+    if not image_bytes:
+        return None
+
+    IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    suffix = mimetypes.guess_extension(mime_type or "") or ".png"
+    if suffix == ".jpe":
+        suffix = ".jpg"
+
+    image_path = IMAGE_CACHE_DIR / f"frontend_{uuid4().hex}{suffix}"
+    image_path.write_bytes(image_bytes)
+    logger.debug(f"Saved frontend image to local file: {image_path}")
+    return str(image_path.resolve())
 
 
 def _save_audio_buffer_to_temp_wav(audio_buffer: np.ndarray) -> str:
