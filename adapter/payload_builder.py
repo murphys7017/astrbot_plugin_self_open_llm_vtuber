@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 from typing import Any
 
 from pydub import AudioSegment
@@ -46,6 +45,7 @@ def build_error(message: str) -> dict[str, Any]:
 
 def build_audio_payload(
     audio_path: str,
+    audio_url: str | None,
     text: str,
     speaker_name: str,
     avatar: str,
@@ -54,6 +54,7 @@ def build_audio_payload(
     display_text = {"text": text, "name": speaker_name, "avatar": avatar}
     return _prepare_audio_payload(
         audio_path=audio_path,
+        audio_url=audio_url,
         display_text=display_text,
         actions=action_mapping,
         forwarded=False,
@@ -62,6 +63,7 @@ def build_audio_payload(
 
 def _prepare_audio_payload(
     audio_path: str | None,
+    audio_url: str | None,
     chunk_length_ms: int = 20,
     display_text: dict[str, Any] | None = None,
     actions: dict[str, Any] | None = None,
@@ -71,7 +73,7 @@ def _prepare_audio_payload(
     if not audio_path:
         return {
             "type": "audio",
-            "audio": None,
+            "audio_url": None,
             "volumes": [],
             "slice_length": chunk_length_ms,
             "display_text": display_text,
@@ -81,17 +83,15 @@ def _prepare_audio_payload(
 
     try:
         audio = AudioSegment.from_file(audio_path)
-        audio_bytes = audio.export(format="wav").read()
     except Exception as exc:
         raise ValueError(
-            f"Error loading or converting generated audio file to wav file '{audio_path}': {exc}"
+            f"Error loading generated audio file '{audio_path}': {exc}"
         ) from exc
 
-    audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
     volumes = _get_volume_by_chunks(audio, chunk_length_ms)
     return {
         "type": "audio",
-        "audio": audio_base64,
+        "audio_url": audio_url,
         "volumes": volumes,
         "slice_length": chunk_length_ms,
         "display_text": display_text,

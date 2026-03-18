@@ -21,22 +21,24 @@ class BaseExpressionPlanningError(ValueError):
     pass
 
 
-SYSTEM_PROMPT = """你是一个 Live2D 基础表情规划器。
+SYSTEM_PROMPT = """你是一个 Live2D 表情规划器。
 
-你的任务是根据：
-- 人格设定
-- 最近对话上下文
-- 当前用户输入
-- 当前回复文本
-
-判断当前回复最合适的语义情绪 semantic_expression，
-并从 emotion_map_keys 中选择一个最接近、最可执行的 base_expression。
+任务：
+根据输入信息，判断语义情绪 semantic_expression，
+并从 emotion_map_keys 中选择 base_expression。
 
 要求：
-1. semantic_expression 表示语义层情绪，可以不受 emotion_map_keys 限制。
-2. base_expression 必须严格来自 emotion_map_keys。
-3. 输出严格 JSON。
-4. 不要输出参数，不要输出模板，不要输出其他说明文字。
+1. base_expression 必须严格来自 emotion_map_keys。
+2. 如果存在明显情绪，不要选择 neutral。
+3. 输出必须是 JSON。
+4. 格式如下：
+
+{
+  "semantic_expression": string,
+  "base_expression": string
+}
+
+5. 不要输出任何额外内容。
 """
 
 
@@ -85,19 +87,21 @@ def build_base_expression_prompt(
     reply_text: str,
     emotion_map_keys: list[str],
 ) -> str:
+    persona_payload = persona or {}
     payload = {
         "persona": {
-            "name": (persona or {}).get("name", "default"),
-            "summary": _build_persona_summary(persona or {}),
+            "name": persona_payload.get("name", "default"),
+            "prompt": persona_payload.get("prompt", ""),
+            "begin_dialogs": persona_payload.get("begin_dialogs", []),
+            "custom_error_message": persona_payload.get("custom_error_message"),
         },
         "recent_context": chatbuffer[-10:],
         "user_input": user_input,
         "reply_text": reply_text,
         "emotion_map_keys": emotion_map_keys,
         "output_schema_hint": {
-            "semantic_expression": "embarrassed",
-            "base_expression": emotion_map_keys[0] if emotion_map_keys else "neutral",
-            "reason": "简要说明为什么这句回复适合该基础表情",
+            "semantic_expression": "string",
+            "base_expression": "string, must be one of emotion_map_keys",
         },
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)
@@ -133,61 +137,13 @@ def build_fallback_base_expression_decision(
     reply_text: str,
     emotion_map_keys: list[str],
 ) -> BaseExpressionDecision:
-    semantic = _guess_semantic_expression(reply_text)
-    base_expression = _map_semantic_to_base_expression(semantic, emotion_map_keys)
+    del reply_text
+    base_expression = "neutral" if "neutral" in emotion_map_keys else emotion_map_keys[0]
     return BaseExpressionDecision(
-        semantic_expression=semantic,
+        semantic_expression="neutral",
         base_expression=base_expression,
-        reason="fallback by local semantic mapping",
+        reason="fallback to neutral",
     )
-
-
-def _guess_semantic_expression(reply_text: str) -> str:
-    text = (reply_text or "").strip().lower()
-    if not text:
-        return "neutral"
-    rules = [
-        ("angry", ("angry", "mad", "annoyed", "生气", "烦", "恼火")),
-        ("surprised", ("wow", "surprise", "unexpected", "哇", "惊讶", "没想到")),
-        ("thinking", ("think", "consider", "让我想想", "思考")),
-        ("embarrassed", ("不好意思", "害羞", "嘴硬", "别问", "才不是", "才没有")),
-        ("happy", ("great", "awesome", "开心", "高兴", "喜欢", "不错")),
-        ("tired", ("sorry", "sad", "抱歉", "难过", "遗憾", "累")),
-    ]
-    for semantic, keywords in rules:
-        if any(keyword in text for keyword in keywords):
-            return semantic
-    return "neutral"
-
-
-def _map_semantic_to_base_expression(semantic_expression: str, emotion_map_keys: list[str]) -> str:
-    aliases = {
-        "neutral": ["neutral"],
-        "happy": ["happy", "joy", "smirk"],
-        "angry": ["angry", "anger", "disgust"],
-        "surprised": ["surprised", "surprise"],
-        "thinking": ["thinking", "confused", "smirk"],
-        "embarrassed": ["embarrassed", "smirk", "confused", "sadness"],
-        "tired": ["tired", "sadness", "fear"],
-    }
-    candidates = aliases.get(semantic_expression, []) + ["neutral"]
-    for candidate in candidates:
-        if candidate in emotion_map_keys:
-            return candidate
-    return emotion_map_keys[0]
-
-
-def _build_persona_summary(persona: dict[str, Any]) -> str:
-    name = persona.get("name", "default")
-    prompt = str(persona.get("prompt", "")).strip()
-    begin_dialogs = persona.get("begin_dialogs", [])
-
-    parts = [f"name={name}"]
-    if prompt:
-        parts.append(f"prompt={prompt[:300]}")
-    if isinstance(begin_dialogs, list) and begin_dialogs:
-        parts.append(f"begin_dialogs_count={len(begin_dialogs)}")
-    return " | ".join(parts)
 
 
 def _load_json_payload(raw_text: str) -> Any:

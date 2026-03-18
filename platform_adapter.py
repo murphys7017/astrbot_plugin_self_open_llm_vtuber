@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
+import time
 import numpy as np
 
 from astrbot.api.platform import Platform, AstrBotMessage, MessageMember, PlatformMetadata, MessageType
@@ -12,21 +13,18 @@ from astrbot.api.platform import register_platform_adapter
 from astrbot.api.provider import Provider, STTProvider
 from astrbot import logger
 from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
-
-
-
-
 import json
 import traceback
 from typing import Any
 from uuid import uuid4
+
+from pydub import AudioSegment
 
 from .adapter.base_expression_planner import (
     BaseExpressionPlanningError,
     build_fallback_base_expression_decision,
     plan_base_expression,
 )
-from .adapter.base_expression_fallback import RuleBasedExpressionMapper
 from .adapter.audio_runtime import create_vad_engine
 from .adapter.chat_buffer import ChatBuffer
 from .adapter.payload_builder import (
@@ -47,6 +45,10 @@ from .static_resources import StaticResourceServer
 PLUGIN_DIR = Path(__file__).resolve().parent
 LIVE2DS_DIR = PLUGIN_DIR / "live2ds"
 OLV_DIR = PLUGIN_DIR / "olv"
+AUDIO_CACHE_DIR = OLV_DIR / "cache" / "audio"
+AUDIO_CACHE_MAX_FILES = 120
+AUDIO_CACHE_MAX_AGE_SECONDS = 6 * 60 * 60
+AUDIO_CACHE_TRIM_PROTECTION_SECONDS = 10 * 60
 
 
 @register_platform_adapter(
@@ -89,7 +91,6 @@ class OLVPetPlatformAdapter(Platform):
         self.model_info: dict[str, Any] = {}
 
         self.session_state = SessionState(client_uid=self.client_uid)
-        self.expression_mapper = RuleBasedExpressionMapper()
 
         self._ws_server = None
         self._ws_client = None
@@ -111,6 +112,8 @@ class OLVPetPlatformAdapter(Platform):
         self.chat_buffer = ChatBuffer(
             maxlen=int(_plugin_config_get(self._plugin_config, "chat_buffer_size", 10))
         )
+        self._prepare_audio_cache_dir()
+        self._cleanup_audio_cache()
 
         logger.info(
             "OLVPetPlatformAdapter initialized "
@@ -328,6 +331,76 @@ class OLVPetPlatformAdapter(Platform):
         )
         return self._vad_engine
 
+    def _prepare_audio_cache_dir(self) -> None:
+        AUDIO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _cleanup_audio_cache(self) -> None:
+        self._prepare_audio_cache_dir()
+        now = time.time()
+        cached_files = [
+            entry
+            for entry in AUDIO_CACHE_DIR.iterdir()
+            if entry.is_file()
+        ]
+
+        for entry in cached_files:
+            try:
+                age_seconds = now - entry.stat().st_mtime
+            except OSError:
+                continue
+
+            if age_seconds <= AUDIO_CACHE_MAX_AGE_SECONDS:
+                continue
+
+            try:
+                entry.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning(f"Failed to remove expired audio cache file `{entry}`: {exc}")
+
+        remaining_files = [
+            entry
+            for entry in AUDIO_CACHE_DIR.iterdir()
+            if entry.is_file()
+        ]
+        protected_cutoff = now - AUDIO_CACHE_TRIM_PROTECTION_SECONDS
+        trimmable_files = sorted(
+            (
+                entry
+                for entry in remaining_files
+                if entry.stat().st_mtime <= protected_cutoff
+            ),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+
+        for entry in trimmable_files[AUDIO_CACHE_MAX_FILES:]:
+            try:
+                entry.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning(f"Failed to trim audio cache file `{entry}`: {exc}")
+
+    def _cache_audio_file(self, source_audio_path: str) -> tuple[str, str]:
+        self._cleanup_audio_cache()
+
+        source_path = Path(source_audio_path)
+        if not source_path.exists():
+            raise FileNotFoundError(f"Audio file not found: {source_audio_path}")
+
+        self._prepare_audio_cache_dir()
+        cached_filename = f"{uuid4().hex}.wav"
+        cached_path = AUDIO_CACHE_DIR / cached_filename
+
+        try:
+            audio = AudioSegment.from_file(source_path)
+            audio.export(cached_path, format="wav")
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to convert generated audio file `{source_audio_path}` to wav cache: {exc}"
+            ) from exc
+
+        audio_url = f"http://{self.host}:{self.http_port}/cache/audio/{cached_filename}"
+        return str(cached_path), audio_url
+
     async def _handle_client(self, websocket):
         if self._ws_client is not None:
             await websocket.send(json.dumps(build_error("Only one client is supported.")))
@@ -358,29 +431,12 @@ class OLVPetPlatformAdapter(Platform):
         message_chain,
         unified_msg_origin: str | None = None,
     ) -> None:
-        texts: list[str] = []
-        picture_paths: list[str] = []
-        record_paths: list[str] = []
+        texts, picture_paths, record_paths = _extract_outbound_message_parts(message_chain)
         logger.debug(f"Emitting message chain: {message_chain}")
-        for component in _iter_message_chain(message_chain):
-            if isinstance(component, Plain) and component.text.strip():
-                texts.append(component.text.strip())
-            elif isinstance(component, Image):
-                image_path = getattr(component, "file", None)
-                if isinstance(image_path, str) and image_path:
-                    picture_paths.append(image_path)
-            elif isinstance(component, Record):
-                # Extract text from Record if available
-                record_text = getattr(component, "text", None)
-                if record_text and isinstance(record_text, str) and record_text.strip():
-                    texts.append(record_text.strip())
-                # Also extract file path
-                record_path = getattr(component, "file", None)
-                if isinstance(record_path, str) and record_path:
-                    record_paths.append(record_path)
 
         reply_text = "\n".join(texts).strip()
-        if reply_text:
+        has_audio_reply = bool(record_paths)
+        if reply_text and not has_audio_reply:
             self.chat_buffer.add("assistant", reply_text)
             await self._send_json(build_full_text(reply_text))
 
@@ -401,11 +457,13 @@ class OLVPetPlatformAdapter(Platform):
         # Send actions only if non-empty
         actions_to_send = actions if actions else None
 
-        if record_paths:
+        if has_audio_reply:
             record_path = record_paths[0]
+            cached_audio_path, audio_url = self._cache_audio_file(record_path)
             await self._send_json(
                 build_audio_payload(
-                    audio_path=record_path,
+                    audio_path=cached_audio_path,
+                    audio_url=audio_url,
                     text=reply_text,
                     speaker_name=self.speaker_name,
                     avatar="",
@@ -420,6 +478,7 @@ class OLVPetPlatformAdapter(Platform):
             await self._send_json(
                 build_audio_payload(
                     audio_path="",
+                    audio_url=None,
                     text=reply_text,
                     speaker_name=self.speaker_name,
                     avatar="",
@@ -487,6 +546,8 @@ class OLVPetPlatformAdapter(Platform):
         if latest_plugin_config is not None:
             self._plugin_config = latest_plugin_config
 
+        previous_stt_provider_id = self.stt_provider_id
+        previous_expression_provider_id = self.expression_provider_id
         previous_vad_model = self.vad_model
         previous_vad_config = dict(self.vad_config)
 
@@ -526,6 +587,33 @@ class OLVPetPlatformAdapter(Platform):
             f"(live2d_model_name={self.live2d_model_name or '<default>'}, "
             f"model_url={self.model_info.get('url', '<missing>')})"
         )
+
+        provider_config_changed = (
+            previous_stt_provider_id != self.stt_provider_id
+            or previous_expression_provider_id != self.expression_provider_id
+        )
+        provider_binding_missing = (
+            (self.stt_provider_id and self._selected_stt_provider is None)
+            or (not self.stt_provider_id and self._selected_stt_provider is not None)
+            or (
+                self.expression_provider_id
+                and self._selected_expression_provider is None
+            )
+            or (
+                not self.expression_provider_id
+                and self._selected_expression_provider is not None
+            )
+        )
+        if provider_config_changed or provider_binding_missing:
+            logger.info(
+                "Provider runtime settings changed, reloading provider bindings "
+                f"(stt: {previous_stt_provider_id or '<default>'} -> {self.stt_provider_id or '<default>'}, "
+                f"expression: {previous_expression_provider_id or '<disabled>'} -> "
+                f"{self.expression_provider_id or '<disabled>'})"
+            )
+            self._selected_stt_provider = None
+            self._selected_expression_provider = None
+            self._load_selected_providers()
 
     async def _refresh_runtime_settings_async(
         self,
@@ -595,12 +683,18 @@ class OLVPetPlatformAdapter(Platform):
             return None
 
         emotion_map = self.model_info.get("emotionMap") or {}
+        motion_map = self.model_info.get("motionMap") or {}
         emotion_map_keys = [
             key for key in emotion_map.keys() if isinstance(key, str) and key
         ]
         decision = build_fallback_base_expression_decision(reply_text, emotion_map_keys)
         planner_error = None
         if self._selected_expression_provider is not None:
+            try:
+                provider_id = self._selected_expression_provider.meta().id
+            except Exception:
+                provider_id = "<unknown>"
+            logger.debug(f"Planning base expression with provider: {provider_id}")
             try:
                 decision = await plan_base_expression(
                     self._selected_expression_provider,
@@ -612,20 +706,29 @@ class OLVPetPlatformAdapter(Platform):
                 )
             except BaseExpressionPlanningError as exc:
                 planner_error = str(exc)
-                logger.warning(f"Base expression planner validation failed, fallback to local mapping: {exc}")
+                logger.warning(f"Base expression planner validation failed, fallback to neutral: {exc}")
             except Exception as exc:
                 planner_error = str(exc)
-                logger.warning(f"Base expression planner failed, fallback to local mapping: {exc}")
+                logger.warning(f"Base expression planner failed, fallback to neutral: {exc}")
 
-        resolved_expression = emotion_map.get(
+        resolved_expressions = _resolve_action_asset_list(
+            emotion_map,
             decision.base_expression,
-            next(iter(emotion_map.values()), "neutral"),
+        )
+        resolved_expression = (
+            resolved_expressions[0] if resolved_expressions else "neutral"
+        )
+        resolved_motions = _resolve_action_asset_list(
+            motion_map,
+            decision.base_expression,
         )
 
         actions: dict[str, Any] = {
             "expressions": [resolved_expression],
             "expression_decision": decision.to_payload(),
         }
+        if resolved_motions:
+            actions["motions"] = resolved_motions
         if planner_error:
             actions["expression_decision_error"] = planner_error
         return actions
@@ -754,6 +857,36 @@ def _iter_message_chain(message_chain) -> list[Any]:
     return [message_chain]
 
 
+def _extract_outbound_message_parts(message_chain) -> tuple[list[str], list[str], list[str]]:
+    texts: list[str] = []
+    picture_paths: list[str] = []
+    record_paths: list[str] = []
+
+    for component in _iter_message_chain(message_chain):
+        if isinstance(component, Plain) and component.text.strip():
+            texts.append(component.text.strip())
+            continue
+
+        if isinstance(component, Image):
+            image_path = getattr(component, "file", None)
+            if isinstance(image_path, str) and image_path:
+                picture_paths.append(image_path)
+            continue
+
+        if not isinstance(component, Record):
+            continue
+
+        record_text = getattr(component, "text", None)
+        if isinstance(record_text, str) and record_text.strip():
+            texts.append(record_text.strip())
+
+        record_path = getattr(component, "file", None)
+        if isinstance(record_path, str) and record_path:
+            record_paths.append(record_path)
+
+    return texts, picture_paths, record_paths
+
+
 def _config_get(config: Any, key: str, default: Any) -> Any:
     if config is None:
         return default
@@ -773,6 +906,43 @@ def _plugin_config_get(config: Any, key: str, default: Any) -> Any:
         value = config.get(key, default)
         return default if value is None else value
     return default
+
+
+def _normalize_action_key(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip().lower()
+
+
+def _normalize_action_asset_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        asset = value.strip()
+        return [asset] if asset else []
+    if isinstance(value, list):
+        return [
+            item.strip()
+            for item in value
+            if isinstance(item, str) and item.strip()
+        ]
+    return []
+
+
+def _resolve_action_asset_list(asset_map: Any, decision_key: str) -> list[str]:
+    if not isinstance(asset_map, dict) or not asset_map:
+        return []
+
+    normalized_key = _normalize_action_key(decision_key)
+    if normalized_key:
+        for key, value in asset_map.items():
+            if _normalize_action_key(key) == normalized_key:
+                return _normalize_action_asset_list(value)
+
+    for value in asset_map.values():
+        normalized_assets = _normalize_action_asset_list(value)
+        if normalized_assets:
+            return normalized_assets
+
+    return []
 
 
 def _image_from_data_uri(data_uri: str):
