@@ -47,6 +47,7 @@ logs/*
 
 # Cache and models
 cache/*
+olv/models/
 olv/cache/audio
 src/open_llm_vtuber/tts/asset
 src/open_llm_vtuber/tts/config
