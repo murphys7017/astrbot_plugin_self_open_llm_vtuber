@@ -1,4 +1,4 @@
-"""Rule-based expression mapping for desktop-pet mode."""
+"""Rule-based fallback mapping for base expressions."""
 
 from __future__ import annotations
 
@@ -19,9 +19,9 @@ class RuleBasedExpressionMapper:
 
     def __init__(self) -> None:
         self._rules: list[tuple[str, tuple[str, ...]]] = [
-            ("excited", ("!", "great", "awesome", "amazing", "太棒", "开心", "高兴")),
+            ("happy", ("!", "great", "awesome", "amazing", "太棒", "开心", "高兴")),
             ("happy", ("nice", "good", "glad", "happy", "不错", "喜欢", "开心")),
-            ("sad", ("sorry", "sad", "unfortunately", "抱歉", "难过", "遗憾")),
+            ("tired", ("sorry", "sad", "unfortunately", "抱歉", "难过", "遗憾")),
             ("angry", ("angry", "mad", "annoyed", "生气", "烦", "恼火")),
             ("surprised", ("wow", "surprise", "unexpected", "哇", "惊讶", "没想到")),
             ("thinking", ("think", "consider", "let me see", "让我想想", "思考")),
@@ -47,4 +47,3 @@ class RuleBasedExpressionMapper:
             template="neutral",
             actions={"expressions": ["neutral"]},
         )
-

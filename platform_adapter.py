@@ -1,6 +1,7 @@
 from __future__ import annotations
 """AstrBot platform adapter for the OLV desktop-pet frontend."""
 import asyncio
+import os
 from pathlib import Path
 import numpy as np
 
@@ -8,7 +9,9 @@ from astrbot.api.platform import Platform, AstrBotMessage, MessageMember, Platfo
 from astrbot.api.message_components import Plain, Image, Record # 消息链中的组件，可以根据需要导入
 from astrbot.core.platform.astr_message_event import MessageSesion
 from astrbot.api.platform import register_platform_adapter
+from astrbot.api.provider import Provider, STTProvider
 from astrbot import logger
+from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
 
 
 
@@ -18,8 +21,14 @@ import traceback
 from typing import Any
 from uuid import uuid4
 
-from .adapter.expression_mapper import RuleBasedExpressionMapper
+from .adapter.base_expression_planner import (
+    BaseExpressionPlanningError,
+    build_fallback_base_expression_decision,
+    plan_base_expression,
+)
+from .adapter.base_expression_fallback import RuleBasedExpressionMapper
 from .adapter.audio_runtime import create_vad_engine
+from .adapter.chat_buffer import ChatBuffer
 from .adapter.payload_builder import (
     build_audio_payload,
     build_backend_synth_complete,
@@ -29,8 +38,8 @@ from .adapter.payload_builder import (
     build_full_text,
     build_set_model_and_conf,
 )
+from .adapter.plugin_runtime import get_plugin_config, get_plugin_context
 from .adapter.protocol import ProtocolError, normalize_inbound_message
-from .adapter.remote_whisper_asr import RemoteOpenAIWhisperASR
 from .adapter.session_state import SessionState
 from .platform_event import OLVPetPlatformEvent
 from .static_resources import StaticResourceServer
@@ -52,19 +61,6 @@ OLV_DIR = PLUGIN_DIR / "olv"
         "speaker_name": "AstrBot",
         "model_info_json": "{}",
         "auto_start_mic": True,
-        "remote_stt_url": "http://192.168.5.14:8000/stt",
-        "remote_whisper_base_url": "http://192.168.5.14:8000/stt",
-        "remote_whisper_model": "",
-        "remote_whisper_api_key": "",
-        "remote_whisper_language": "",
-        "remote_whisper_prompt": "",
-        "remote_whisper_timeout": 120,
-        "vad_model": "silero_vad",
-        "vad_prob_threshold": 0.4,
-        "vad_db_threshold": 60,
-        "vad_required_hits": 3,
-        "vad_required_misses": 24,
-        "vad_smoothing_window": 5,
     },
 )
 class OLVPetPlatformAdapter(Platform):
@@ -84,30 +80,31 @@ class OLVPetPlatformAdapter(Platform):
         self.conf_uid = _config_get(self.config, "conf_uid", "astrbot-desktop")
         self.speaker_name = _config_get(self.config, "speaker_name", "AstrBot")
         self.auto_start_mic = bool(_config_get(self.config, "auto_start_mic", True))
-        self.remote_stt_url = _config_get(
-            self.config,
-            "remote_stt_url",
-            _config_get(self.config, "remote_whisper_base_url", "http://192.168.5.14:8000/stt"),
+        self._plugin_config = get_plugin_config() or {}
+        self.stt_provider_id = _plugin_config_get(self._plugin_config, "stt_provider_id", "")
+        self.expression_provider_id = _plugin_config_get(
+            self._plugin_config, "expression_provider_id", ""
         )
-        self.remote_whisper_model = _config_get(self.config, "remote_whisper_model", "")
-        self.remote_whisper_api_key = _config_get(self.config, "remote_whisper_api_key", "")
-        self.remote_whisper_language = _config_get(self.config, "remote_whisper_language", "")
-        self.remote_whisper_prompt = _config_get(self.config, "remote_whisper_prompt", "")
-        self.remote_whisper_timeout = float(_config_get(self.config, "remote_whisper_timeout", 120))
-        self.vad_model = _config_get(self.config, "vad_model", "silero_vad")
+        self.vad_model = _plugin_config_get(
+            self._plugin_config, "vad_model", "silero_vad"
+        )
         self.vad_config = {
             "orig_sr": 16000,
             "target_sr": 16000,
-            "prob_threshold": float(_config_get(self.config, "vad_prob_threshold", 0.4)),
-            "db_threshold": int(_config_get(self.config, "vad_db_threshold", 60)),
-            "required_hits": int(_config_get(self.config, "vad_required_hits", 3)),
-            "required_misses": int(_config_get(self.config, "vad_required_misses", 24)),
-            "smoothing_window": int(_config_get(self.config, "vad_smoothing_window", 5)),
+            "prob_threshold": float(_plugin_config_get(self._plugin_config, "vad_prob_threshold", 0.4)),
+            "db_threshold": int(_plugin_config_get(self._plugin_config, "vad_db_threshold", 60)),
+            "required_hits": int(_plugin_config_get(self._plugin_config, "vad_required_hits", 3)),
+            "required_misses": int(_plugin_config_get(self._plugin_config, "vad_required_misses", 24)),
+            "smoothing_window": int(_plugin_config_get(self._plugin_config, "vad_smoothing_window", 5)),
         }
+        self.live2d_model_name = _plugin_config_get(
+            self._plugin_config, "live2d_model_name", ""
+        )
         self.model_info = _parse_model_info(
             _config_get(self.config, "model_info_json", "{}"),
             host=self.host,
             http_port=self.http_port,
+            selected_model_name=self.live2d_model_name,
         )
 
         self.session_state = SessionState(client_uid=self.client_uid)
@@ -125,13 +122,12 @@ class OLVPetPlatformAdapter(Platform):
         self._audio_buffer = np.array([], dtype=np.float32)
         self._audio_buffer_lock = asyncio.Lock()
         self._vad_engine = None
-        self._whisper_asr = RemoteOpenAIWhisperASR(
-            endpoint_url=self.remote_stt_url,
-            model=self.remote_whisper_model,
-            api_key=self.remote_whisper_api_key,
-            language=self.remote_whisper_language,
-            prompt=self.remote_whisper_prompt,
-            timeout=self.remote_whisper_timeout,
+        self._plugin_context = get_plugin_context()
+        self._default_persona: dict[str, Any] | None = None
+        self._selected_stt_provider: STTProvider | None = None
+        self._selected_expression_provider: Provider | None = None
+        self.chat_buffer = ChatBuffer(
+            maxlen=int(_plugin_config_get(self._plugin_config, "chat_buffer_size", 10))
         )
 
         logger.info(
@@ -153,6 +149,8 @@ class OLVPetPlatformAdapter(Platform):
             import websockets  # type: ignore
 
             logger.info("OLV Pet Adapter imported `websockets` successfully")
+            await self._load_default_persona()
+            self._load_selected_providers()
             self._static_server.start()
             logger.info(
                 f"OLV Pet Adapter starting websocket server on ws://{self.host}:{self.port}"
@@ -259,6 +257,7 @@ class OLVPetPlatformAdapter(Platform):
                 await self._finalize_turn()
 
             self.session_state.begin_turn(message_obj.message_str)
+            self.chat_buffer.add("user", message_obj.message_str)
             await self._send_json(build_control("conversation-chain-start"))
 
             event = OLVPetPlatformEvent(
@@ -314,7 +313,7 @@ class OLVPetPlatformAdapter(Platform):
             return
 
         try:
-            text = (await self._whisper_asr.async_transcribe_np(audio_buffer)).strip()
+            text = (await self._transcribe_audio(audio_buffer)).strip()
         except Exception as exc:
             logger.error(f"Audio transcription failed: {exc}")
             await self._send_json(build_error(f"Audio transcription failed: {exc}"))
@@ -375,7 +374,7 @@ class OLVPetPlatformAdapter(Platform):
         texts: list[str] = []
         picture_paths: list[str] = []
         record_paths: list[str] = []
-
+        logger.debug(f"Emitting message chain: {message_chain}")
         for component in _iter_message_chain(message_chain):
             if isinstance(component, Plain) and component.text.strip():
                 texts.append(component.text.strip())
@@ -384,19 +383,36 @@ class OLVPetPlatformAdapter(Platform):
                 if isinstance(image_path, str) and image_path:
                     picture_paths.append(image_path)
             elif isinstance(component, Record):
+                # Extract text from Record if available
+                record_text = getattr(component, "text", None)
+                if record_text and isinstance(record_text, str) and record_text.strip():
+                    texts.append(record_text.strip())
+                # Also extract file path
                 record_path = getattr(component, "file", None)
                 if isinstance(record_path, str) and record_path:
                     record_paths.append(record_path)
 
         reply_text = "\n".join(texts).strip()
         if reply_text:
+            self.chat_buffer.add("assistant", reply_text)
             await self._send_json(build_full_text(reply_text))
 
-        actions = self.expression_mapper.decide(reply_text).actions if reply_text else None
-        if actions and picture_paths:
-            actions = {**actions, "pictures": picture_paths}
-        elif picture_paths:
-            actions = {"pictures": picture_paths}
+        # Build expression actions from reply text
+        actions = {}
+        if reply_text:
+            try:
+                expr_actions = await self._build_expression_actions(reply_text)
+                if expr_actions:
+                    actions.update(expr_actions)
+            except Exception as exc:
+                logger.warning(f"Failed to build expression actions: {exc}")
+        
+        # Add pictures if available
+        if picture_paths:
+            actions["pictures"] = picture_paths
+        
+        # Send actions only if non-empty
+        actions_to_send = actions if actions else None
 
         if record_paths:
             record_path = record_paths[0]
@@ -406,7 +422,7 @@ class OLVPetPlatformAdapter(Platform):
                     text=reply_text,
                     speaker_name=self.speaker_name,
                     avatar="",
-                    action_mapping=actions,
+                    action_mapping=actions_to_send,
                 )
             )
             await self._send_json(build_backend_synth_complete())
@@ -432,6 +448,134 @@ class OLVPetPlatformAdapter(Platform):
         await self._send_json({"type": "group-update", "members": [], "is_owner": False})
         if self.auto_start_mic:
             await self._send_json(build_control("start-mic"))
+
+    async def _load_default_persona(self) -> None:
+        if self._plugin_context is None:
+            logger.warning("Plugin context is unavailable, skip loading default persona.")
+            return
+
+        configured_persona_id = _plugin_config_get(self._plugin_config, "persona_id", "")
+        try:
+            persona = None
+            if configured_persona_id:
+                persona = next(
+                    (
+                        item
+                        for item in self._plugin_context.persona_manager.personas_v3
+                        if item["name"] == configured_persona_id
+                    ),
+                    None,
+                )
+                if persona is None:
+                    logger.warning(
+                        f"Configured persona `{configured_persona_id}` not found, fallback to default persona."
+                    )
+
+            if persona is None:
+                persona = await self._plugin_context.persona_manager.get_default_persona_v3(
+                    umo=self.client_uid
+                )
+        except Exception as exc:
+            logger.warning(f"Failed to load default persona: {exc}")
+            return
+
+        self._default_persona = {
+            "name": persona.get("name", "default"),
+            "prompt": persona.get("prompt", ""),
+            "begin_dialogs": persona.get("begin_dialogs", []),
+            "custom_error_message": persona.get("custom_error_message"),
+        }
+        logger.info(f"Loaded default persona: {self._default_persona['name']}")
+
+    def _load_selected_providers(self) -> None:
+        if self._plugin_context is None:
+            logger.warning("Plugin context is unavailable, skip loading providers from plugin config.")
+            return
+
+        if self.stt_provider_id:
+            provider = self._plugin_context.get_provider_by_id(self.stt_provider_id)
+            if isinstance(provider, STTProvider):
+                self._selected_stt_provider = provider
+                logger.info(f"Loaded STT provider from plugin config: {self.stt_provider_id}")
+            else:
+                logger.warning(f"Configured STT provider `{self.stt_provider_id}` not found or not a STTProvider.")
+        else:
+            try:
+                provider = self._plugin_context.get_using_stt_provider(umo=self.client_uid)
+            except Exception as exc:
+                logger.warning(f"Failed to get current STT provider: {exc}")
+                provider = None
+            if isinstance(provider, STTProvider):
+                self._selected_stt_provider = provider
+                logger.info(f"Using current STT provider: {provider.meta().id}")
+
+        if self.expression_provider_id:
+            provider = self._plugin_context.get_provider_by_id(self.expression_provider_id)
+            if isinstance(provider, Provider):
+                self._selected_expression_provider = provider
+                logger.info(
+                    f"Loaded expression planner provider from plugin config: {self.expression_provider_id}"
+                )
+            else:
+                logger.warning(
+                    f"Configured expression provider `{self.expression_provider_id}` not found or not a chat Provider."
+                )
+
+    async def _build_expression_actions(self, reply_text: str) -> dict[str, Any] | None:
+        if not reply_text:
+            return None
+
+        emotion_map = self.model_info.get("emotionMap") or {}
+        emotion_map_keys = [
+            key for key in emotion_map.keys() if isinstance(key, str) and key
+        ]
+        decision = build_fallback_base_expression_decision(reply_text, emotion_map_keys)
+        planner_error = None
+        if self._selected_expression_provider is not None:
+            try:
+                decision = await plan_base_expression(
+                    self._selected_expression_provider,
+                    persona=self._default_persona,
+                    chatbuffer=self.chat_buffer.to_list(),
+                    user_input=self.session_state.last_user_text,
+                    reply_text=reply_text,
+                    emotion_map_keys=emotion_map_keys,
+                )
+            except BaseExpressionPlanningError as exc:
+                planner_error = str(exc)
+                logger.warning(f"Base expression planner validation failed, fallback to local mapping: {exc}")
+            except Exception as exc:
+                planner_error = str(exc)
+                logger.warning(f"Base expression planner failed, fallback to local mapping: {exc}")
+
+        resolved_expression = emotion_map.get(
+            decision.base_expression,
+            next(iter(emotion_map.values()), "neutral"),
+        )
+
+        actions: dict[str, Any] = {
+            "expressions": [resolved_expression],
+            "expression_decision": decision.to_payload(),
+        }
+        if planner_error:
+            actions["expression_decision_error"] = planner_error
+        return actions
+
+    async def _transcribe_audio(self, audio_buffer: np.ndarray) -> str:
+        if self._selected_stt_provider is None:
+            raise RuntimeError(
+                "No STT provider available. Please configure `stt_provider_id` in plugin config or set a default AstrBot STT provider."
+            )
+
+        temp_path = _save_audio_buffer_to_temp_wav(audio_buffer)
+        try:
+            return await self._selected_stt_provider.get_text(temp_path)
+        finally:
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except Exception as exc:
+                logger.warning(f"Failed to remove temp STT audio file {temp_path}: {exc}")
 
     async def _handle_frontend_compat(self, message: dict[str, Any]) -> None:
         msg_type = message.get("type")
@@ -559,6 +703,15 @@ def _config_get(config: Any, key: str, default: Any) -> Any:
     return default
 
 
+def _plugin_config_get(config: Any, key: str, default: Any) -> Any:
+    if config is None:
+        return default
+    if hasattr(config, "get"):
+        value = config.get(key, default)
+        return default if value is None else value
+    return default
+
+
 def _image_from_data_uri(data_uri: str):
     if ";base64," not in data_uri:
         return None
@@ -568,7 +721,32 @@ def _image_from_data_uri(data_uri: str):
     return Image.fromBase64(base64=bs64_data)
 
 
-def _parse_model_info(raw_model_info: Any, host: str, http_port: int) -> dict[str, Any]:
+def _save_audio_buffer_to_temp_wav(audio_buffer: np.ndarray) -> str:
+    import wave
+
+    temp_dir = get_astrbot_temp_path()
+    os.makedirs(temp_dir, exist_ok=True)
+    temp_path = os.path.join(temp_dir, f"olv_stt_{uuid4().hex}.wav")
+
+    audio = audio_buffer.astype(np.float32)
+    audio = np.clip(audio, -1.0, 1.0)
+    pcm = (audio * 32767).astype(np.int16)
+
+    with wave.open(temp_path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(pcm.tobytes())
+
+    return temp_path
+
+
+def _parse_model_info(
+    raw_model_info: Any,
+    host: str,
+    http_port: int,
+    selected_model_name: str = "",
+) -> dict[str, Any]:
     base_url = f"http://{host}:{http_port}"
 
     if isinstance(raw_model_info, dict):
@@ -585,6 +763,22 @@ def _parse_model_info(raw_model_info: Any, host: str, http_port: int) -> dict[st
         try:
             data = json.loads(model_dict_path.read_text(encoding="utf-8"))
             if isinstance(data, list) and data:
+                if selected_model_name:
+                    selected = next(
+                        (
+                            item
+                            for item in data
+                            if isinstance(item, dict)
+                            and item.get("name") == selected_model_name
+                        ),
+                        None,
+                    )
+                    if isinstance(selected, dict):
+                        return _normalize_model_info(selected, base_url)
+                    logger.warning(
+                        f"Live2D model `{selected_model_name}` not found in live2ds/model_dict.json, fallback to first model."
+                    )
+
                 first = data[0]
                 if isinstance(first, dict):
                     return _normalize_model_info(first, base_url)
