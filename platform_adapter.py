@@ -416,6 +416,17 @@ class OLVPetPlatformAdapter(Platform):
             self.session_state.mark_playing()
             return
 
+        if actions_to_send:
+            await self._send_json(
+                build_audio_payload(
+                    audio_path="",
+                    text=reply_text,
+                    speaker_name=self.speaker_name,
+                    avatar="",
+                    action_mapping=actions_to_send,
+                )
+            )
+
         if reply_text:
             self.session_state.reset_to_idle()
             await self._send_json(build_backend_synth_complete())
@@ -802,7 +813,8 @@ def _parse_model_info(
     base_url = f"http://{host}:{http_port}"
 
     if isinstance(raw_model_info, dict):
-        return _normalize_model_info(raw_model_info, base_url)
+        if raw_model_info:
+            return _normalize_model_info(raw_model_info, base_url)
     if isinstance(raw_model_info, str):
         try:
             parsed = json.loads(raw_model_info)
