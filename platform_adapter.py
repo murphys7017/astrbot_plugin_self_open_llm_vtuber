@@ -113,6 +113,8 @@ class OLVPetPlatformAdapter(Platform):
         self._selected_stt_provider: STTProvider | None = None
         self._selected_expression_provider: Provider | None = None
         self._last_sent_model_signature: str | None = None
+        self._turn_timing: dict[str, Any] = {}
+        self._turn_expression_cache: dict[str, Any] = {}
         self.chat_buffer = ChatBuffer(
             maxlen=int(_plugin_config_get(self._plugin_config, "chat_buffer_size", 10))
         )
@@ -264,6 +266,8 @@ class OLVPetPlatformAdapter(Platform):
                 await self._finalize_turn()
 
             self.session_state.begin_turn(message_obj.message_str)
+            self._begin_turn_timing(message_obj.message_str)
+            self._turn_expression_cache = {}
             self.chat_buffer.add("user", message_obj.message_str)
             await self._send_json(build_control("conversation-chain-start"))
 
@@ -275,6 +279,12 @@ class OLVPetPlatformAdapter(Platform):
                 self,
             )
             self.commit_event(event)
+            self._mark_turn_timing("event_committed_at")
+            logger.info(
+                "Turn timing start: turn=%s text_len=%d",
+                self._current_turn_index(),
+                len(message_obj.message_str or ""),
+            )
 
     async def _handle_audio_data(self, message: dict[str, Any]) -> None:
         audio_data = message.get("audio", [])
@@ -448,35 +458,56 @@ class OLVPetPlatformAdapter(Platform):
         message_chain,
         unified_msg_origin: str | None = None,
     ) -> None:
+        emit_started_at = time.perf_counter()
+        self._mark_turn_timing("emit_started_at", emit_started_at)
         texts, picture_paths, record_paths = _extract_outbound_message_parts(message_chain)
         logger.debug(f"Emitting message chain: {message_chain}")
 
         reply_text = "\n".join(texts).strip()
         has_audio_reply = bool(record_paths)
+        if self._should_skip_duplicate_plain_emit(
+            reply_text=reply_text,
+            has_audio_reply=has_audio_reply,
+        ):
+            logger.info(
+                "Skip duplicate dual-output plain emit: turn=%s text=%s",
+                self._current_turn_index(),
+                reply_text[:120],
+            )
+            return
+
         if reply_text and not has_audio_reply:
             self.chat_buffer.add("assistant", reply_text)
             await self._send_json(build_full_text(reply_text))
 
         # Build expression actions from reply text
         actions = {}
+        expression_started_at = time.perf_counter()
         if reply_text:
             try:
-                expr_actions = await self._build_expression_actions(reply_text)
+                expr_actions = await self._get_or_build_expression_actions(
+                    reply_text=reply_text,
+                    has_audio_reply=has_audio_reply,
+                )
                 if expr_actions:
                     actions.update(expr_actions)
             except Exception as exc:
                 logger.warning(f"Failed to build expression actions: {exc}")
-        
+        expression_elapsed_ms = (time.perf_counter() - expression_started_at) * 1000.0
+        self._mark_turn_timing("expression_completed_at")
+
         # Add pictures if available
         if picture_paths:
             actions["pictures"] = picture_paths
-        
+
         # Send actions only if non-empty
         actions_to_send = actions if actions else None
 
         if has_audio_reply:
             record_path = record_paths[0]
+            audio_cache_started_at = time.perf_counter()
             cached_audio_path, audio_url = self._cache_audio_file(record_path)
+            audio_cache_elapsed_ms = (time.perf_counter() - audio_cache_started_at) * 1000.0
             await self._send_json(
                 build_audio_payload(
                     audio_path=cached_audio_path,
@@ -487,8 +518,21 @@ class OLVPetPlatformAdapter(Platform):
                     action_mapping=actions_to_send,
                 )
             )
+            self._mark_turn_timing("audio_payload_sent_at")
             await self._send_json(build_backend_synth_complete())
             self.session_state.mark_playing()
+            if self._turn_expression_cache:
+                self._turn_expression_cache["audio_sent"] = True
+            logger.info(
+                "Turn timing: turn=%s pipeline_before_emit_ms=%.1f expression_ms=%.1f audio_cache_ms=%.1f total_before_playback_ms=%.1f has_audio=%s pictures=%d",
+                self._current_turn_index(),
+                self._elapsed_ms("event_committed_at", "emit_started_at"),
+                expression_elapsed_ms,
+                audio_cache_elapsed_ms,
+                self._elapsed_ms("received_at", "audio_payload_sent_at"),
+                True,
+                len(picture_paths),
+            )
             return
 
         if actions_to_send:
@@ -502,12 +546,23 @@ class OLVPetPlatformAdapter(Platform):
                     action_mapping=actions_to_send,
                 )
             )
+            self._mark_turn_timing("audio_payload_sent_at")
 
         if reply_text:
             self.session_state.reset_to_idle()
             await self._send_json(build_backend_synth_complete())
             await self._send_json(build_force_new_message())
             await self._send_json(build_control("conversation-chain-end"))
+            self._mark_turn_timing("turn_completed_at")
+            logger.info(
+                "Turn timing: turn=%s pipeline_before_emit_ms=%.1f expression_ms=%.1f total_ms=%.1f has_audio=%s pictures=%d",
+                self._current_turn_index(),
+                self._elapsed_ms("event_committed_at", "emit_started_at"),
+                expression_elapsed_ms,
+                self._elapsed_ms("received_at", "turn_completed_at"),
+                False,
+                len(picture_paths),
+            )
 
     async def _send_initial_messages(self) -> None:
         await self._refresh_runtime_settings_async(
@@ -660,6 +715,86 @@ class OLVPetPlatformAdapter(Platform):
             return
         await self._send_json(payload)
         self._last_sent_model_signature = signature
+
+    def _current_turn_index(self) -> int:
+        return int(getattr(self.session_state, "turn_index", 0) or 0)
+
+    def _begin_turn_timing(self, user_text: str) -> None:
+        self._turn_timing = {
+            "turn_index": self._current_turn_index(),
+            "received_at": time.perf_counter(),
+            "user_text_len": len(user_text or ""),
+        }
+
+    def _mark_turn_timing(
+        self,
+        key: str,
+        value: float | None = None,
+    ) -> None:
+        if not self._turn_timing:
+            self._turn_timing = {"turn_index": self._current_turn_index()}
+        self._turn_timing[key] = (
+            time.perf_counter() if value is None else value
+        )
+
+    def _elapsed_ms(self, start_key: str, end_key: str) -> float:
+        start_value = _coerce_perf_counter(self._turn_timing.get(start_key))
+        end_value = _coerce_perf_counter(self._turn_timing.get(end_key))
+        if start_value is None or end_value is None:
+            return -1.0
+        return max((end_value - start_value) * 1000.0, 0.0)
+
+    async def _get_or_build_expression_actions(
+        self,
+        *,
+        reply_text: str,
+        has_audio_reply: bool,
+    ) -> dict[str, Any] | None:
+        cache_key = (reply_text or "").strip()
+        if not cache_key:
+            return None
+
+        cached_reply_text = self._turn_expression_cache.get("reply_text")
+        cached_actions = self._turn_expression_cache.get("actions")
+        if cached_reply_text == cache_key and isinstance(cached_actions, dict):
+            logger.debug(
+                "Reusing cached expression actions for turn=%s has_audio=%s",
+                self._current_turn_index(),
+                has_audio_reply,
+            )
+            return dict(cached_actions)
+
+        actions = await self._build_expression_actions(cache_key)
+        if isinstance(actions, dict):
+            self._turn_expression_cache = {
+                "reply_text": cache_key,
+                "actions": dict(actions),
+                "has_audio_reply": has_audio_reply,
+                "audio_sent": False,
+            }
+        return actions
+
+    def _should_skip_duplicate_plain_emit(
+        self,
+        *,
+        reply_text: str,
+        has_audio_reply: bool,
+    ) -> bool:
+        if has_audio_reply:
+            return False
+
+        cache_key = (reply_text or "").strip()
+        if not cache_key:
+            return False
+
+        cached_reply_text = self._turn_expression_cache.get("reply_text")
+        cached_has_audio_reply = bool(self._turn_expression_cache.get("has_audio_reply"))
+        cached_audio_sent = bool(self._turn_expression_cache.get("audio_sent"))
+        return (
+            cached_reply_text == cache_key
+            and cached_has_audio_reply
+            and cached_audio_sent
+        )
 
     def _load_selected_providers(self) -> None:
         if self._plugin_context is None:
@@ -835,6 +970,13 @@ class OLVPetPlatformAdapter(Platform):
         await self._send_json(build_force_new_message())
         await self._send_json(build_control("conversation-chain-end"))
         self.session_state.mark_playback_complete()
+        self._mark_turn_timing("playback_completed_at")
+        logger.info(
+            "Turn timing playback: turn=%s playback_ms=%.1f total_ms=%.1f",
+            self._current_turn_index(),
+            self._elapsed_ms("audio_payload_sent_at", "playback_completed_at"),
+            self._elapsed_ms("received_at", "playback_completed_at"),
+        )
 
     async def _send_json(self, payload: dict[str, Any]) -> None:
         if self._ws_client is None:
@@ -973,6 +1115,12 @@ def _image_from_data_uri(data_uri: str):
     if not bs64_data:
         return None
     return Image.fromBase64(base64=bs64_data)
+
+
+def _coerce_perf_counter(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
 
 
 def _save_frontend_image_payload_to_local_path(
