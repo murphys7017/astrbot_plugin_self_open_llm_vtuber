@@ -8,7 +8,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from astrbot import logger
+from astrbot.api import logger
 
 
 def _build_handler(routes: dict[str, Path]):

@@ -7,4 +7,5 @@ class MyPlugin(Star):
 
         set_plugin_context(context)
         set_plugin_config(config or {})
+        # Import solely for side effect: the class decorator registers the adapter.
         from .platform_adapter import OLVPetPlatformAdapter  # noqa: F401

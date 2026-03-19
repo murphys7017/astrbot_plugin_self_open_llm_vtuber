@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import time
+from urllib.parse import unquote
 import numpy as np
 
 from astrbot.api.platform import Platform, AstrBotMessage, MessageMember, PlatformMetadata, MessageType
@@ -14,7 +15,7 @@ from astrbot.api.message_components import Plain, Image, Record # 消息链中�
 from astrbot.core.platform.astr_message_event import MessageSesion
 from astrbot.api.platform import register_platform_adapter
 from astrbot.api.provider import Provider, STTProvider
-from astrbot import logger
+from astrbot.api import logger
 from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
 import json
 import traceback
@@ -53,6 +54,15 @@ IMAGE_CACHE_DIR = OLV_DIR / "cache" / "images"
 AUDIO_CACHE_MAX_FILES = 120
 AUDIO_CACHE_MAX_AGE_SECONDS = 6 * 60 * 60
 AUDIO_CACHE_TRIM_PROTECTION_SECONDS = 10 * 60
+FRONTEND_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+FRONTEND_IMAGE_ALLOWED_SUFFIXES = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".bmp",
+}
 
 
 @register_platform_adapter(
@@ -145,7 +155,7 @@ class OLVPetPlatformAdapter(Platform):
                 reload_persona=True,
                 reload_providers=True,
             )
-            self._static_server.start()
+            await asyncio.to_thread(self._static_server.start)
             logger.info(
                 f"OLV Pet Adapter starting websocket server on ws://{self.host}:{self.port}"
             )
@@ -960,7 +970,7 @@ class OLVPetPlatformAdapter(Platform):
 
         if self._static_server is not None:
             try:
-                self._static_server.stop()
+                await asyncio.to_thread(self._static_server.stop)
             except Exception as exc:
                 logger.warning(f"Failed to close static resource server cleanly: {exc}")
 
@@ -978,10 +988,24 @@ class OLVPetPlatformAdapter(Platform):
             self._elapsed_ms("received_at", "playback_completed_at"),
         )
 
-    async def _send_json(self, payload: dict[str, Any]) -> None:
-        if self._ws_client is None:
-            return
-        await self._ws_client.send(json.dumps(payload, ensure_ascii=False))
+    async def _send_json(self, payload: dict[str, Any]) -> bool:
+        client = self._ws_client
+        if client is None:
+            return False
+        try:
+            await client.send(json.dumps(payload, ensure_ascii=False))
+            return True
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if self._ws_client is client:
+                self._ws_client = None
+            logger.warning(f"Failed to send websocket payload `{payload.get('type', '<unknown>')}`: {exc}")
+            try:
+                await client.close()
+            except Exception:
+                pass
+            return False
 
     @staticmethod
     def _convert_image_component(image_payload: Any):
@@ -1133,10 +1157,11 @@ def _save_frontend_image_payload_to_local_path(
         return None
 
     if payload.startswith("file:///"):
-        return payload.replace("file:///", "", 1)
+        source_path = Path(unquote(payload.replace("file:///", "", 1)))
+        return _copy_allowed_frontend_image_to_cache(source_path, mime_type)
 
     if os.path.exists(payload):
-        return os.path.abspath(payload)
+        return _copy_allowed_frontend_image_to_cache(Path(payload), mime_type)
 
     if payload.startswith("http://") or payload.startswith("https://"):
         return None
@@ -1184,6 +1209,64 @@ def _write_frontend_image_bytes(image_bytes: bytes | None, mime_type: str) -> st
     image_path.write_bytes(image_bytes)
     logger.debug(f"Saved frontend image to local file: {image_path}")
     return str(image_path.resolve())
+
+
+def _copy_allowed_frontend_image_to_cache(
+    source_path: Path,
+    mime_type: str | None = None,
+) -> str | None:
+    try:
+        resolved_path = source_path.expanduser().resolve(strict=True)
+    except OSError:
+        return None
+
+    if not resolved_path.is_file():
+        return None
+
+    if not _is_allowed_frontend_image_path(resolved_path):
+        logger.warning(f"Rejected frontend local image path outside allowed roots: {resolved_path}")
+        return None
+
+    if resolved_path.suffix.lower() not in FRONTEND_IMAGE_ALLOWED_SUFFIXES:
+        logger.warning(f"Rejected frontend local image path with unsupported suffix: {resolved_path}")
+        return None
+
+    try:
+        image_bytes = resolved_path.read_bytes()
+    except OSError as exc:
+        logger.warning(f"Failed to read frontend local image `{resolved_path}`: {exc}")
+        return None
+
+    if not image_bytes:
+        return None
+
+    if len(image_bytes) > FRONTEND_IMAGE_MAX_BYTES:
+        logger.warning(f"Rejected frontend image larger than {FRONTEND_IMAGE_MAX_BYTES} bytes: {resolved_path}")
+        return None
+
+    resolved_mime_type = mime_type or mimetypes.guess_type(str(resolved_path))[0] or "image/png"
+    return _write_frontend_image_bytes(image_bytes, resolved_mime_type)
+
+
+def _is_allowed_frontend_image_path(path: Path) -> bool:
+    for root in _frontend_image_allowed_roots():
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _frontend_image_allowed_roots() -> tuple[Path, ...]:
+    temp_root = Path(get_astrbot_temp_path()).resolve()
+    return (
+        IMAGE_CACHE_DIR.resolve(),
+        LIVE2DS_DIR.resolve(),
+        (OLV_DIR / "avatars").resolve(),
+        (OLV_DIR / "backgrounds").resolve(),
+        temp_root,
+    )
 
 
 def _save_audio_buffer_to_temp_wav(audio_buffer: np.ndarray) -> str:

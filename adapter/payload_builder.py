@@ -103,7 +103,9 @@ def _prepare_audio_payload(
 def _get_volume_by_chunks(audio: AudioSegment, chunk_length_ms: int) -> list[float]:
     chunks = make_chunks(audio, chunk_length_ms)
     volumes = [chunk.rms for chunk in chunks]
+    if not volumes:
+        return []
     max_volume = max(volumes)
     if max_volume == 0:
-        raise ValueError("Audio is empty or all zero.")
+        return [0.0 for _ in volumes]
     return [volume / max_volume for volume in volumes]
