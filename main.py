@@ -6,6 +6,6 @@ class MyPlugin(Star):
         from .adapter.plugin_runtime import set_plugin_config, set_plugin_context
 
         set_plugin_context(context)
-        set_plugin_config(config or {})
+        set_plugin_config(config if config is not None else {})
         # Import solely for side effect: the class decorator registers the adapter.
         from .platform_adapter import OLVPetPlatformAdapter  # noqa: F401

@@ -14,7 +14,7 @@
   "live2d_model_name": {
     "description": "启动时使用的 Live2D 模型。",
     "type": "string",
-    "default": "mao_pro",
+    "default": "Mk6_1.0",
     "options": [
       "mao_pro",
       "Mk6_1.0"
