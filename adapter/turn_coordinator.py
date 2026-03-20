@@ -121,7 +121,6 @@ class TurnCoordinator:
         emit_started_at = time.perf_counter()
         self._mark_turn_timing("emit_started_at", emit_started_at)
         texts, picture_paths, record_paths = _extract_outbound_message_parts(message_chain)
-        logger.debug("Emitting message chain: %s", message_chain)
 
         reply_text = "\n".join(texts).strip()
         has_audio_reply = bool(record_paths)
@@ -129,7 +128,7 @@ class TurnCoordinator:
             reply_text=reply_text,
             has_audio_reply=has_audio_reply,
         ):
-            logger.info(
+            logger.debug(
                 "Skip duplicate dual-output plain emit: turn=%s text=%s",
                 self._current_turn_index(),
                 reply_text[:120],
@@ -181,7 +180,7 @@ class TurnCoordinator:
             self.session_state.mark_playing()
             if self._turn_expression_cache:
                 self._turn_expression_cache["audio_sent"] = True
-            logger.info(
+            logger.debug(
                 "Turn timing: turn=%s pipeline_before_emit_ms=%.1f expression_ms=%.1f "
                 "audio_cache_ms=%.1f total_before_playback_ms=%.1f has_audio=%s pictures=%d",
                 self._current_turn_index(),
@@ -213,7 +212,7 @@ class TurnCoordinator:
             await self._send_json(build_force_new_message())
             await self._send_json(build_control("conversation-chain-end"))
             self._mark_turn_timing("turn_completed_at")
-            logger.info(
+            logger.debug(
                 "Turn timing: turn=%s pipeline_before_emit_ms=%.1f expression_ms=%.1f "
                 "total_ms=%.1f has_audio=%s pictures=%d",
                 self._current_turn_index(),
@@ -231,7 +230,7 @@ class TurnCoordinator:
         await self._send_json(build_control("conversation-chain-end"))
         self.session_state.mark_playback_complete()
         self._mark_turn_timing("playback_completed_at")
-        logger.info(
+        logger.debug(
             "Turn timing playback: turn=%s playback_ms=%.1f total_ms=%.1f",
             self._current_turn_index(),
             self._elapsed_ms("audio_payload_sent_at", "playback_completed_at"),
@@ -254,7 +253,7 @@ class TurnCoordinator:
             event = self._build_platform_event(message_obj)
             self._commit_event(event)
             self._mark_turn_timing("event_committed_at")
-            logger.info(
+            logger.debug(
                 "Turn timing start: turn=%s text_len=%d",
                 self._current_turn_index(),
                 len(message_obj.message_str or ""),

@@ -35,21 +35,15 @@ class WebSocketTransport:
         self._ws_client = None
 
     async def start(self) -> None:
-        logger.info("OLV Pet Adapter entering run()")
+        logger.debug("Desktop VTuber Adapter transport starting")
         try:
             import websockets  # type: ignore
 
-            logger.info("OLV Pet Adapter imported `websockets` successfully")
             await self._refresh_runtime_settings_async(
                 reload_persona=True,
                 reload_providers=True,
             )
             await asyncio.to_thread(self.static_server.start)
-            logger.info(
-                "OLV Pet Adapter starting websocket server on ws://%s:%s",
-                self.host,
-                self.port,
-            )
 
             self._ws_server = await websockets.serve(
                 self._handle_client,
@@ -64,7 +58,7 @@ class WebSocketTransport:
             )
             await self._ws_server.wait_closed()
         except asyncio.CancelledError:
-            logger.info("OLV Pet Adapter run() cancelled, shutting down websocket server")
+            logger.debug("Desktop VTuber Adapter transport cancelled")
             await self.stop()
             raise
 
@@ -122,7 +116,7 @@ class WebSocketTransport:
             return
 
         self._ws_client = websocket
-        logger.info("Desktop frontend connected to OLV Pet Adapter.")
+        logger.debug("Desktop frontend connected to adapter transport")
         try:
             await self._send_initial_messages()
             async for raw_message in websocket:
@@ -137,7 +131,7 @@ class WebSocketTransport:
         finally:
             self._ws_client = None
             await self._on_disconnect()
-            logger.info("Desktop frontend disconnected from OLV Pet Adapter.")
+            logger.debug("Desktop frontend disconnected from adapter transport")
 
     async def _send_initial_messages(self) -> None:
         await self._refresh_runtime_settings_async(

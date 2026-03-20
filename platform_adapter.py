@@ -56,7 +56,6 @@ class OLVPetPlatformAdapter(Platform):
 
     def __init__(self, platform_config: dict, platform_settings: dict, event_queue: asyncio.Queue) -> None:
         super().__init__(platform_config, event_queue)
-        logger.info("OLVPetPlatformAdapter super().__init__ completed")
         self.config = platform_config
         self.settings = platform_settings or {}
 
@@ -134,7 +133,7 @@ class OLVPetPlatformAdapter(Platform):
             ensure_vad_engine=self._ensure_vad_engine,
         )
 
-        logger.info(
+        logger.debug(
             "Desktop VTuber Adapter initialized "
             f"(host={self.host}, port={self.port}, http_port={self.http_port}, "
             f"conf_name={self.conf_name}, conf_uid={self.conf_uid})"

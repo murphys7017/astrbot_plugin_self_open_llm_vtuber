@@ -1,4 +1,5 @@
 from pathlib import Path
+import logging
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -19,6 +20,7 @@ class MyPlugin(Star):
         super().__init__(context, config)
         from .adapter.plugin_runtime import set_plugin_config, set_plugin_context
 
+        _configure_noisy_loggers()
         set_plugin_context(context)
         set_plugin_config(config if config is not None else {})
         # Import solely for side effect: the class decorator registers the adapter.
@@ -31,8 +33,6 @@ class MyPlugin(Star):
         req: ProviderRequest,
     ) -> None:
         if event.get_platform_id() != "olv_pet_adapter":
-            return
-        if req.func_tool is not None:
             return
 
         plugin_config = get_plugin_config() or {}
@@ -56,6 +56,11 @@ class MyPlugin(Star):
             req.system_prompt = req.system_prompt.rstrip() + hook_prompt
         else:
             req.system_prompt = hook_prompt.lstrip()
+        logger.debug(
+            "[Live2DExpr] hook request injected model=%s func_tool=%s",
+            selected_model_name or "<default>",
+            req.func_tool is not None,
+        )
 
     @filter.on_llm_response()
     async def extract_live2d_base_expression_tag(
@@ -95,3 +100,12 @@ class MyPlugin(Star):
         )
         event.set_extra(LIVE2D_BASE_EXPRESSION_EXTRA_KEY, extracted_expression)
         resp.completion_text = cleaned_text
+
+
+def _configure_noisy_loggers() -> None:
+    for logger_name in (
+        "pyffmpeg",
+        "pyffmpeg.FFmpeg",
+        "pyffmpeg.misc.Paths",
+    ):
+        logging.getLogger(logger_name).setLevel(logging.CRITICAL)

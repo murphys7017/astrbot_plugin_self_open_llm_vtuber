@@ -46,7 +46,7 @@ def _build_handler(routes: dict[str, Path]):
             return content_type or "application/octet-stream"
 
         def log_message(self, format: str, *args) -> None:
-            logger.debug("Static HTTP: " + format % args)
+            return
 
     return StaticResourceHandler
 
