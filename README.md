@@ -92,7 +92,7 @@ npm run dev:web
 
 配置项定义位于：
 
-[_conf_schema.json](/c:/Users/Administrator/Downloads/AstrBot/data/plugins/astrbot_plugin_self_open_llm_vtuber/_conf_schema.json)
+[_conf_schema.json](/_conf_schema.json)
 
 常用配置如下。
 
@@ -140,7 +140,7 @@ npm run dev:web
 
 ## 平台适配器默认参数
 
-平台适配器定义在 [platform_adapter.py](/c:/Users/Administrator/Downloads/AstrBot/data/plugins/astrbot_plugin_self_open_llm_vtuber/platform_adapter.py) 中，默认参数如下：
+平台适配器定义在 [platform_adapter.py](/platform_adapter.py) 中，默认参数如下：
 
 - `host`: `127.0.0.1`
 - `port`: `12396`

@@ -1,18 +1,15 @@
 from __future__ import annotations
 """AstrBot platform adapter for the OLV desktop-pet frontend."""
 import asyncio
-import time
 from pathlib import Path
 
-from astrbot.api.platform import Platform, AstrBotMessage, MessageMember, PlatformMetadata, MessageType
-from astrbot.api.message_components import Plain
+from astrbot.api.platform import Platform, AstrBotMessage, PlatformMetadata
 from astrbot.core.platform.astr_message_event import MessageSesion
 from astrbot.api.platform import register_platform_adapter
 from astrbot.api import logger
 from astrbot.core.utils.astrbot_path import (
     get_astrbot_plugin_data_path,
 )
-import json
 import traceback
 from typing import Any
 from uuid import uuid4
@@ -21,11 +18,11 @@ from .adapter.audio_runtime import create_vad_engine
 from .adapter.chat_buffer import ChatBuffer
 from .adapter.frontend_compat import FrontendCompatHandler
 from .adapter.media_service import MediaService
+from .adapter.message_factory import MessageFactory
 from .adapter.model_info import build_static_routes, list_background_files
-from .adapter.payload_builder import build_control, build_error, build_full_text
-from .adapter.protocol import normalize_inbound_message
 from .adapter.runtime_state import RuntimeState
 from .adapter.session_state import SessionState
+from .adapter.transport_ws import WebSocketTransport
 from .adapter.turn_coordinator import TurnCoordinator
 from .platform_event import OLVPetPlatformEvent
 from .static_resources import StaticResourceServer
@@ -80,8 +77,6 @@ class OLVPetPlatformAdapter(Platform):
 
         self.session_state = SessionState(client_uid=self.client_uid)
 
-        self._ws_server = None
-        self._ws_client = None
         self._static_server = StaticResourceServer(
             host=self.host,
             port=self.http_port,
@@ -99,11 +94,25 @@ class OLVPetPlatformAdapter(Platform):
             audio_cache_dir=AUDIO_CACHE_DIR,
             image_cache_dir=IMAGE_CACHE_DIR,
         )
+        self.message_factory = MessageFactory(
+            client_uid=self.client_uid,
+            media_service=self.media_service,
+            image_cooldown_seconds_getter=lambda: self.runtime_state.image_cooldown_seconds,
+        )
         self.frontend_compat_handler = FrontendCompatHandler(
             background_files_getter=lambda: list_background_files(OLV_DIR)
         )
+        self.transport = WebSocketTransport(
+            host=self.host,
+            port=self.port,
+            static_server=self._static_server,
+            auto_start_mic=self.auto_start_mic,
+            handle_message=self.handle_msg,
+            refresh_runtime_settings_async=self._refresh_runtime_settings_async,
+            send_current_model_and_conf=self._send_current_model_and_conf,
+            on_disconnect=self._handle_transport_disconnect,
+        )
         self._vad_engine = None
-        self._last_accepted_image_at_monotonic: float | None = None
         self.chat_buffer = ChatBuffer(
             maxlen=int(_plugin_config_get(self.runtime_state.plugin_config, "chat_buffer_size", 10))
         )
@@ -113,12 +122,12 @@ class OLVPetPlatformAdapter(Platform):
             media_service=self.media_service,
             chat_buffer=self.chat_buffer,
             speaker_name=self.speaker_name,
-            convert_message=self.convert_message,
-            build_message_object=self._build_message_object,
+            convert_message=self.message_factory.convert_message,
+            build_message_object=self.message_factory.build_message_object,
             handle_frontend_compat=self._handle_frontend_compat,
             refresh_runtime_settings=self._refresh_runtime_settings,
             send_current_model_and_conf=self._send_current_model_and_conf,
-            send_json=self._send_json,
+            send_json=self.transport.send_json,
             build_platform_event=self._build_platform_event,
             commit_event=self.commit_event,
             ensure_vad_engine=self._ensure_vad_engine,
@@ -167,30 +176,9 @@ class OLVPetPlatformAdapter(Platform):
         return self.runtime_state.selected_expression_provider
 
     async def run(self):
-        logger.info("OLV Pet Adapter entering run()")
         try:
-            import websockets  # type: ignore
-
-            logger.info("OLV Pet Adapter imported `websockets` successfully")
-            await self._refresh_runtime_settings_async(
-                reload_persona=True,
-                reload_providers=True,
-            )
-            await asyncio.to_thread(self._static_server.start)
-            logger.info(
-                f"OLV Pet Adapter starting websocket server on ws://{self.host}:{self.port}"
-            )
-
-            self._ws_server = await websockets.serve(
-                self._handle_client,
-                self.host,
-                self.port,
-                max_size=16 * 1024 * 1024,
-            )
-            logger.info(f"OLV Pet Adapter websocket listening on ws://{self.host}:{self.port}")
-            await self._ws_server.wait_closed()
+            await self.transport.start()
         except asyncio.CancelledError:
-            logger.info("OLV Pet Adapter run() cancelled, shutting down websocket server")
             await self.terminate()
             raise
         except Exception as exc:
@@ -202,12 +190,7 @@ class OLVPetPlatformAdapter(Platform):
         await super().send_by_session(session, message_chain)
 
     def convert_message(self, data: dict[str, Any]) -> AstrBotMessage:
-        inbound = normalize_inbound_message(data)
-        return self._build_message_object(
-            text=inbound.payload.text,
-            raw_message=data,
-            images=inbound.payload.images,
-        )
+        return self.message_factory.convert_message(data)
 
     def _build_message_object(
         self,
@@ -215,40 +198,11 @@ class OLVPetPlatformAdapter(Platform):
         raw_message: dict[str, Any],
         images: list[Any] | None = None,
     ) -> AstrBotMessage:
-        images = images or []
-        accepted_images, dropped_image_count = self._apply_image_cooldown(images)
-
-        abm = AstrBotMessage()
-        abm.type = MessageType.FRIEND_MESSAGE
-        abm.self_id = "olv_pet_adapter"
-        abm.session_id = self.client_uid
-        abm.message_id = str(uuid4())
-        abm.message_str = text
-        abm.sender = MessageMember(user_id=self.client_uid, nickname="DesktopUser")
-        abm.message = [Plain(text=text)]
-        normalized_raw_message = dict(raw_message)
-        resolved_image_inputs: list[dict[str, str]] = []
-
-        for image_payload in accepted_images:
-            image_component = self.media_service.convert_image_component(image_payload)
-            if image_component is not None:
-                abm.message.append(image_component)
-                image_ref = (
-                    (getattr(image_component, "file", "") or "").strip()
-                    or (getattr(image_component, "url", "") or "").strip()
-                )
-                if image_ref:
-                    resolved_image_inputs.append(
-                        {"type": "input_image", "image_url": image_ref}
-                    )
-
-        if resolved_image_inputs:
-            normalized_raw_message["resolved_images"] = resolved_image_inputs
-        if dropped_image_count > 0:
-            normalized_raw_message["dropped_image_count"] = dropped_image_count
-        abm.raw_message = normalized_raw_message
-
-        return abm
+        return self.message_factory.build_message_object(
+            text=text,
+            raw_message=raw_message,
+            images=images,
+        )
 
     def _build_platform_event(self, message_obj: AstrBotMessage) -> OLVPetPlatformEvent:
         return OLVPetPlatformEvent(
@@ -272,31 +226,6 @@ class OLVPetPlatformAdapter(Platform):
         )
         return self._vad_engine
 
-    async def _handle_client(self, websocket):
-        if self._ws_client is not None:
-            await websocket.send(json.dumps(build_error("Only one client is supported.")))
-            await websocket.close()
-            return
-
-        self._ws_client = websocket
-        logger.info("Desktop frontend connected to OLV Pet Adapter.")
-        try:
-            await self._send_initial_messages()
-            async for raw_message in websocket:
-                if isinstance(raw_message, bytes):
-                    raw_message = raw_message.decode("utf-8", errors="ignore")
-                try:
-                    parsed = json.loads(raw_message)
-                except json.JSONDecodeError:
-                    await self._send_json(build_error("Invalid JSON payload"))
-                    continue
-                await self.handle_msg(parsed)
-        finally:
-            self._ws_client = None
-            self.session_state.reset_to_idle()
-            await self.media_service.clear_audio_buffer()
-            logger.info("Desktop frontend disconnected from OLV Pet Adapter.")
-
     async def emit_message_chain(
         self,
         message_chain,
@@ -306,17 +235,6 @@ class OLVPetPlatformAdapter(Platform):
             message_chain=message_chain,
             unified_msg_origin=unified_msg_origin,
         )
-
-    async def _send_initial_messages(self) -> None:
-        await self._refresh_runtime_settings_async(
-            reload_persona=True,
-            reload_providers=True,
-        )
-        await self._send_json(build_full_text("Connection established"))
-        await self._send_current_model_and_conf(force=True)
-        await self._send_json({"type": "group-update", "members": [], "is_owner": False})
-        if self.auto_start_mic:
-            await self._send_json(build_control("start-mic"))
 
     def _refresh_runtime_settings(self) -> None:
         vad_settings_changed = self.runtime_state.refresh()
@@ -351,27 +269,6 @@ class OLVPetPlatformAdapter(Platform):
         self._refresh_runtime_settings()
         await self._send_current_model_and_conf(force=force)
 
-    def _apply_image_cooldown(self, images: list[Any]) -> tuple[list[Any], int]:
-        if not images:
-            return [], 0
-
-        if self.image_cooldown_seconds <= 0:
-            self._last_accepted_image_at_monotonic = time.monotonic()
-            return images, 0
-
-        now = time.monotonic()
-        last_accepted = self._last_accepted_image_at_monotonic
-        if last_accepted is None or (now - last_accepted) >= self.image_cooldown_seconds:
-            self._last_accepted_image_at_monotonic = now
-            return images, 0
-
-        logger.info(
-            "Dropped %s image(s) due to cooldown window (%ss remaining approximately).",
-            len(images),
-            max(int(self.image_cooldown_seconds - (now - last_accepted)), 0),
-        )
-        return [], len(images)
-
     async def _handle_frontend_compat(self, message: dict[str, Any]) -> None:
         await self.frontend_compat_handler.handle(
             message,
@@ -381,51 +278,14 @@ class OLVPetPlatformAdapter(Platform):
 
     async def terminate(self) -> None:
         logger.info("OLV Pet Adapter terminate() called")
-
-        if self._ws_client is not None:
-            try:
-                await self._ws_client.close()
-            except Exception as exc:
-                logger.warning(f"Failed to close desktop websocket client cleanly: {exc}")
-            finally:
-                self._ws_client = None
-
-        if self._ws_server is not None:
-            try:
-                self._ws_server.close()
-                await self._ws_server.wait_closed()
-            except Exception as exc:
-                logger.warning(f"Failed to close websocket server cleanly: {exc}")
-            finally:
-                self._ws_server = None
-
-        if self._static_server is not None:
-            try:
-                await asyncio.to_thread(self._static_server.stop)
-            except Exception as exc:
-                logger.warning(f"Failed to close static resource server cleanly: {exc}")
-
-    async def _finalize_turn(self) -> None:
-        await self.turn_coordinator.finalize_turn()
+        await self.transport.stop()
 
     async def _send_json(self, payload: dict[str, Any]) -> bool:
-        client = self._ws_client
-        if client is None:
-            return False
-        try:
-            await client.send(json.dumps(payload, ensure_ascii=False))
-            return True
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            if self._ws_client is client:
-                self._ws_client = None
-            logger.warning(f"Failed to send websocket payload `{payload.get('type', '<unknown>')}`: {exc}")
-            try:
-                await client.close()
-            except Exception:
-                pass
-            return False
+        return await self.transport.send_json(payload)
+
+    async def _handle_transport_disconnect(self) -> None:
+        self.session_state.reset_to_idle()
+        await self.media_service.clear_audio_buffer()
 
 def _config_get(config: Any, key: str, default: Any) -> Any:
     if config is None:
