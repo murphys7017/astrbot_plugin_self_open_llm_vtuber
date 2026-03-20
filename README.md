@@ -247,6 +247,8 @@ npm run dev
   AstrBot 事件包装
 - [static_resources.py](/c:/Users/Administrator/Downloads/AstrBot/data/plugins/astrbot_plugin_self_open_llm_vtuber/static_resources.py)
   静态资源 HTTP 服务
+- [docs/protocol_baseline.md](/c:/Users/Administrator/Downloads/AstrBot/data/plugins/astrbot_plugin_self_open_llm_vtuber/docs/protocol_baseline.md)
+  当前前后端 WebSocket 协议基线
 - [adapter](/c:/Users/Administrator/Downloads/AstrBot/data/plugins/astrbot_plugin_self_open_llm_vtuber/adapter)
   表情规划、协议处理、运行时配置等辅助模块
 - [live2ds](/c:/Users/Administrator/Downloads/AstrBot/data/plugins/astrbot_plugin_self_open_llm_vtuber/live2ds)
