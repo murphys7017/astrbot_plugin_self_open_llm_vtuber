@@ -38,7 +38,7 @@
     "_special": "select_provider"
   },
   "vad_model": {
-    "description": "前端原始音频断句使用的 VAD 模型。",
+    "description": "前端原始音频断句使用的 VAD 模型。当前使用独立的 silero-vad Python 包，不再依赖 OLV 源码。",
     "type": "string",
     "default": "silero_vad",
     "options": [

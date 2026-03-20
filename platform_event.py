@@ -1,4 +1,4 @@
-"""AstrBot event wrapper for the OLV desktop-pet websocket frontend."""
+"""AstrBot event wrapper for the desktop VTuber websocket frontend."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from astrbot.api.event import AstrMessageEvent
 
 
 class OLVPetPlatformEvent(AstrMessageEvent):
-    """Message event that sends AstrBot replies back to the OLV frontend."""
+    """Message event that sends AstrBot replies back to the desktop VTuber frontend."""
 
     def __init__(self, message_str, message_obj, platform_meta, session_id, adapter):
         super().__init__(message_str, message_obj, platform_meta, session_id)

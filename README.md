@@ -50,12 +50,15 @@ AstrBot/data/plugins/astrbot_plugin_self_open_llm_vtuber
 - `websockets`
 - `pydub`
 - `numpy`
+- `silero-vad`（仅在启用 `raw-audio-data` 后端 VAD 时需要）
 
 如主环境未安装，可在 AstrBot 所用 Python 环境中执行：
 
 ```powershell
-pip install websockets pydub numpy
+pip install websockets pydub numpy silero-vad
 ```
+
+如果你完全不使用 `raw-audio-data`，也可以不安装 `silero-vad`。
 
 ### 3. 安装 ffmpeg
 
@@ -127,8 +130,10 @@ npm run dev:web
 
 ### `vad_model` 及相关参数
 
-- 用于麦克风原始音频断句
+- 用于前端发送 `raw-audio-data` 时的后端断句
 - 默认模型：`silero_vad`
+- 当前实现使用独立的 `silero-vad` Python 包
+- 不再依赖 Open-LLM-VTuber 源码
 
 相关参数：
 
@@ -163,8 +168,8 @@ npm run dev:web
 
 正常情况下，日志里会看到类似内容：
 
-- `OLV Pet Adapter websocket listening on ws://127.0.0.1:12396`
-- `OLV static resources listening on http://127.0.0.1:12397`
+- `Desktop VTuber Adapter websocket listening on ws://127.0.0.1:12396`
+- `Desktop VTuber static resources listening on http://127.0.0.1:12397`
 
 ### 2. 启动前端
 
@@ -209,6 +214,11 @@ npm run dev
 - `raw-audio-data`
 
 收到音频后，会通过 `stt_provider_id` 对应的 STT Provider 转成文字，再交给 AstrBot。
+
+说明：
+
+- 当前推荐使用 `mic-audio-data` + `mic-audio-end`
+- 如果启用 `raw-audio-data`，请确认运行环境已安装 `silero-vad`
 
 ### 表情规划
 

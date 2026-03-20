@@ -1,5 +1,5 @@
 from __future__ import annotations
-"""AstrBot platform adapter for the OLV desktop-pet frontend."""
+"""AstrBot platform adapter for the desktop VTuber frontend."""
 import asyncio
 from pathlib import Path
 
@@ -29,7 +29,7 @@ from .static_resources import StaticResourceServer
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 LIVE2DS_DIR = PLUGIN_DIR / "live2ds"
-OLV_DIR = PLUGIN_DIR / "olv"
+FRONTEND_ASSETS_DIR = PLUGIN_DIR / "olv"
 PLUGIN_DATA_DIR = Path(get_astrbot_plugin_data_path()) / PLUGIN_DIR.name
 RUNTIME_CACHE_DIR = PLUGIN_DATA_DIR / "cache"
 AUDIO_CACHE_DIR = RUNTIME_CACHE_DIR / "audio"
@@ -38,7 +38,7 @@ IMAGE_CACHE_DIR = RUNTIME_CACHE_DIR / "images"
 
 @register_platform_adapter(
     "olv_pet_adapter",
-    "OLV Pet Adapter",
+    "Desktop VTuber Adapter",
     default_config_tmpl={
         "host": "127.0.0.1",
         "port": 12396,
@@ -48,10 +48,11 @@ IMAGE_CACHE_DIR = RUNTIME_CACHE_DIR / "images"
         "speaker_name": "AstrBot",
         "model_info_json": "{}",
         "auto_start_mic": True,
+        "vad_model": "silero_vad",
     },
 )
 class OLVPetPlatformAdapter(Platform):
-    """Platform adapter that accepts OLV websocket messages and emits AstrBot events."""
+    """Platform adapter that accepts desktop VTuber websocket messages and emits AstrBot events."""
 
     def __init__(self, platform_config: dict, platform_settings: dict, event_queue: asyncio.Queue) -> None:
         super().__init__(platform_config, event_queue)
@@ -82,7 +83,7 @@ class OLVPetPlatformAdapter(Platform):
             port=self.http_port,
             routes=build_static_routes(
                 live2ds_dir=LIVE2DS_DIR,
-                olv_dir=OLV_DIR,
+                olv_dir=FRONTEND_ASSETS_DIR,
                 runtime_cache_dir=RUNTIME_CACHE_DIR,
             ),
         )
@@ -90,7 +91,7 @@ class OLVPetPlatformAdapter(Platform):
             host=self.host,
             http_port=self.http_port,
             live2ds_dir=LIVE2DS_DIR,
-            olv_dir=OLV_DIR,
+            olv_dir=FRONTEND_ASSETS_DIR,
             audio_cache_dir=AUDIO_CACHE_DIR,
             image_cache_dir=IMAGE_CACHE_DIR,
         )
@@ -100,7 +101,7 @@ class OLVPetPlatformAdapter(Platform):
             image_cooldown_seconds_getter=lambda: self.runtime_state.image_cooldown_seconds,
         )
         self.frontend_compat_handler = FrontendCompatHandler(
-            background_files_getter=lambda: list_background_files(OLV_DIR)
+            background_files_getter=lambda: list_background_files(FRONTEND_ASSETS_DIR)
         )
         self.transport = WebSocketTransport(
             host=self.host,
@@ -134,7 +135,7 @@ class OLVPetPlatformAdapter(Platform):
         )
 
         logger.info(
-            "OLVPetPlatformAdapter initialized "
+            "Desktop VTuber Adapter initialized "
             f"(host={self.host}, port={self.port}, http_port={self.http_port}, "
             f"conf_name={self.conf_name}, conf_uid={self.conf_uid})"
         )
@@ -143,7 +144,7 @@ class OLVPetPlatformAdapter(Platform):
     def meta(self) -> PlatformMetadata:
         return PlatformMetadata(
             name="olv_pet_adapter",
-            description="OLV Pet Adapter",
+            description="Desktop VTuber Adapter",
             id="olv_pet_adapter",
         )
 
@@ -182,7 +183,7 @@ class OLVPetPlatformAdapter(Platform):
             await self.terminate()
             raise
         except Exception as exc:
-            logger.error(f"OLV Pet Adapter failed during run(): {exc}")
+            logger.error(f"Desktop VTuber Adapter failed during run(): {exc}")
             logger.error(traceback.format_exc())
             raise
 
@@ -220,7 +221,7 @@ class OLVPetPlatformAdapter(Platform):
         if self._vad_engine is not None:
             return self._vad_engine
         self._vad_engine = create_vad_engine(
-            olv_dir=OLV_DIR,
+            olv_dir=FRONTEND_ASSETS_DIR,
             engine_type=self.vad_model,
             kwargs=self.vad_config,
         )
@@ -277,7 +278,7 @@ class OLVPetPlatformAdapter(Platform):
         )
 
     async def terminate(self) -> None:
-        logger.info("OLV Pet Adapter terminate() called")
+        logger.info("Desktop VTuber Adapter terminate() called")
         await self.transport.stop()
 
     async def _send_json(self, payload: dict[str, Any]) -> bool:

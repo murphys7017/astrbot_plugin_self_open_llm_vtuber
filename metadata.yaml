@@ -1,6 +1,6 @@
 name: astrbot_plugin_self_open_llm_vtuber
-display_name: OLV Pet Adapter
-description: AstrBot platform adapter for the Open-LLM-VTuber desktop-pet frontend.
+display_name: Desktop VTuber Adapter
+description: AstrBot platform adapter for the desktop VTuber frontend.
 version: 0.1.0
 author: YakumoAki
 repo: https://github.com/murphys7017/astrbot_plugin_self_open_llm_vtuber
