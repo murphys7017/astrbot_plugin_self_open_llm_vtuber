@@ -13,10 +13,12 @@ from astrbot.api import logger
 from astrbot.api.message_components import Image, Plain, Record
 
 from .base_expression_planner import (
+    BaseExpressionDecision,
     BaseExpressionPlanningError,
     build_fallback_base_expression_decision,
     plan_base_expression,
 )
+from .inline_expression import normalize_base_expression_key
 from .payload_builder import (
     build_audio_payload,
     build_backend_synth_complete,
@@ -112,6 +114,7 @@ class TurnCoordinator:
         self,
         message_chain,
         unified_msg_origin: str | None = None,
+        inline_base_expression: str | None = None,
     ) -> None:
         del unified_msg_origin
 
@@ -144,6 +147,7 @@ class TurnCoordinator:
                 expr_actions = await self._get_or_build_expression_actions(
                     reply_text=reply_text,
                     has_audio_reply=has_audio_reply,
+                    inline_base_expression=inline_base_expression,
                 )
                 if expr_actions:
                     actions.update(expr_actions)
@@ -350,14 +354,23 @@ class TurnCoordinator:
         *,
         reply_text: str,
         has_audio_reply: bool,
+        inline_base_expression: str | None = None,
     ) -> dict[str, Any] | None:
         cache_key = (reply_text or "").strip()
         if not cache_key:
             return None
 
+        normalized_inline_expression = normalize_base_expression_key(inline_base_expression)
         cached_reply_text = self._turn_expression_cache.get("reply_text")
         cached_actions = self._turn_expression_cache.get("actions")
-        if cached_reply_text == cache_key and isinstance(cached_actions, dict):
+        cached_inline_expression = normalize_base_expression_key(
+            self._turn_expression_cache.get("inline_base_expression")
+        )
+        if (
+            cached_reply_text == cache_key
+            and cached_inline_expression == normalized_inline_expression
+            and isinstance(cached_actions, dict)
+        ):
             logger.debug(
                 "Reusing cached expression actions for turn=%s has_audio=%s",
                 self._current_turn_index(),
@@ -365,13 +378,17 @@ class TurnCoordinator:
             )
             return dict(cached_actions)
 
-        actions = await self._build_expression_actions(cache_key)
+        actions = await self._build_expression_actions(
+            cache_key,
+            inline_base_expression=inline_base_expression,
+        )
         if isinstance(actions, dict):
             self._turn_expression_cache = {
                 "reply_text": cache_key,
                 "actions": dict(actions),
                 "has_audio_reply": has_audio_reply,
                 "audio_sent": False,
+                "inline_base_expression": normalized_inline_expression,
             }
         return actions
 
@@ -397,16 +414,34 @@ class TurnCoordinator:
             and cached_audio_sent
         )
 
-    async def _build_expression_actions(self, reply_text: str) -> dict[str, Any] | None:
+    async def _build_expression_actions(
+        self,
+        reply_text: str,
+        inline_base_expression: str | None = None,
+    ) -> dict[str, Any] | None:
         if not reply_text:
             return None
 
         emotion_map = self.runtime_state.model_info.get("emotionMap") or {}
         motion_map = self.runtime_state.model_info.get("motionMap") or {}
         action_map_keys = _collect_action_map_keys(motion_map, emotion_map)
-        decision = build_fallback_base_expression_decision(reply_text, action_map_keys)
-        planner_error = None
-        if self.runtime_state.selected_expression_provider is not None:
+        normalized_inline_expression = normalize_base_expression_key(inline_base_expression)
+        decision_source = "fallback"
+        if normalized_inline_expression and normalized_inline_expression in action_map_keys:
+            decision = BaseExpressionDecision(
+                semantic_expression=normalized_inline_expression,
+                base_expression=normalized_inline_expression,
+                reason="inline llm tag",
+            )
+            planner_error = None
+            decision_source = "inline_tag"
+        else:
+            decision = build_fallback_base_expression_decision(reply_text, action_map_keys)
+            planner_error = None
+        if (
+            not normalized_inline_expression
+            and self.runtime_state.selected_expression_provider is not None
+        ):
             try:
                 provider_id = self.runtime_state.selected_expression_provider.meta().id
             except Exception:
@@ -421,6 +456,7 @@ class TurnCoordinator:
                     reply_text=reply_text,
                     emotion_map_keys=action_map_keys,
                 )
+                decision_source = "expression_provider"
             except BaseExpressionPlanningError as exc:
                 planner_error = str(exc)
                 logger.warning(
@@ -462,6 +498,12 @@ class TurnCoordinator:
             }
         if planner_error:
             actions["expression_decision_error"] = planner_error
+        logger.info(
+            "[Live2DExpr] decision source=%s base_expression=%s semantic_expression=%s",
+            decision_source,
+            decision.base_expression,
+            decision.semantic_expression,
+        )
         return actions
 
     async def _transcribe_audio(self, audio_buffer: np.ndarray) -> str:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from astrbot.api.event import AstrMessageEvent
 
+from .adapter.inline_expression import LIVE2D_BASE_EXPRESSION_EXTRA_KEY
+
 
 class OLVPetPlatformEvent(AstrMessageEvent):
     """Message event that sends AstrBot replies back to the desktop VTuber frontend."""
@@ -16,5 +18,6 @@ class OLVPetPlatformEvent(AstrMessageEvent):
         await self.adapter.emit_message_chain(
             message_chain=message,
             unified_msg_origin=self.unified_msg_origin,
+            inline_base_expression=self.get_extra(LIVE2D_BASE_EXPRESSION_EXTRA_KEY),
         )
         await super().send(message)
