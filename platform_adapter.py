@@ -2,6 +2,7 @@ from __future__ import annotations
 """AstrBot platform adapter for the OLV desktop-pet frontend."""
 import asyncio
 import base64
+from collections import Counter
 import mimetypes
 import os
 from pathlib import Path
@@ -16,7 +17,10 @@ from astrbot.core.platform.astr_message_event import MessageSesion
 from astrbot.api.platform import register_platform_adapter
 from astrbot.api.provider import Provider, STTProvider
 from astrbot.api import logger
-from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
+from astrbot.core.utils.astrbot_path import (
+    get_astrbot_plugin_data_path,
+    get_astrbot_temp_path,
+)
 import json
 import traceback
 from typing import Any
@@ -49,8 +53,10 @@ from .static_resources import StaticResourceServer
 PLUGIN_DIR = Path(__file__).resolve().parent
 LIVE2DS_DIR = PLUGIN_DIR / "live2ds"
 OLV_DIR = PLUGIN_DIR / "olv"
-AUDIO_CACHE_DIR = OLV_DIR / "cache" / "audio"
-IMAGE_CACHE_DIR = OLV_DIR / "cache" / "images"
+PLUGIN_DATA_DIR = Path(get_astrbot_plugin_data_path()) / PLUGIN_DIR.name
+RUNTIME_CACHE_DIR = PLUGIN_DATA_DIR / "cache"
+AUDIO_CACHE_DIR = RUNTIME_CACHE_DIR / "audio"
+IMAGE_CACHE_DIR = RUNTIME_CACHE_DIR / "images"
 AUDIO_CACHE_MAX_FILES = 120
 AUDIO_CACHE_MAX_AGE_SECONDS = 6 * 60 * 60
 AUDIO_CACHE_TRIM_PROTECTION_SECONDS = 10 * 60
@@ -115,7 +121,7 @@ class OLVPetPlatformAdapter(Platform):
         )
         self._turn_lock = asyncio.Lock()
         self._history_uid = str(uuid4())
-        self._audio_buffer = np.array([], dtype=np.float32)
+        self._audio_buffer_chunks: list[np.ndarray] = []
         self._audio_buffer_lock = asyncio.Lock()
         self._vad_engine = None
         self._plugin_context = get_plugin_context()
@@ -125,6 +131,8 @@ class OLVPetPlatformAdapter(Platform):
         self._last_sent_model_signature: str | None = None
         self._turn_timing: dict[str, Any] = {}
         self._turn_expression_cache: dict[str, Any] = {}
+        self._last_accepted_image_at_monotonic: float | None = None
+        self.image_cooldown_seconds = 60
         self.chat_buffer = ChatBuffer(
             maxlen=int(_plugin_config_get(self._plugin_config, "chat_buffer_size", 10))
         )
@@ -195,6 +203,7 @@ class OLVPetPlatformAdapter(Platform):
         images: list[Any] | None = None,
     ) -> AstrBotMessage:
         images = images or []
+        accepted_images, dropped_image_count = self._apply_image_cooldown(images)
 
         abm = AstrBotMessage()
         abm.type = MessageType.FRIEND_MESSAGE
@@ -207,7 +216,7 @@ class OLVPetPlatformAdapter(Platform):
         normalized_raw_message = dict(raw_message)
         resolved_image_inputs: list[dict[str, str]] = []
 
-        for image_payload in images:
+        for image_payload in accepted_images:
             image_component = self._convert_image_component(image_payload)
             if image_component is not None:
                 abm.message.append(image_component)
@@ -222,6 +231,8 @@ class OLVPetPlatformAdapter(Platform):
 
         if resolved_image_inputs:
             normalized_raw_message["resolved_images"] = resolved_image_inputs
+        if dropped_image_count > 0:
+            normalized_raw_message["dropped_image_count"] = dropped_image_count
         abm.raw_message = normalized_raw_message
 
         return abm
@@ -302,8 +313,7 @@ class OLVPetPlatformAdapter(Platform):
             return
 
         chunk = np.array(audio_data, dtype=np.float32)
-        async with self._audio_buffer_lock:
-            self._audio_buffer = np.append(self._audio_buffer, chunk)
+        await self._append_audio_chunk(chunk)
 
     async def _handle_raw_audio_data(self, message: dict[str, Any]) -> None:
         audio_data = message.get("audio", [])
@@ -326,14 +336,11 @@ class OLVPetPlatformAdapter(Platform):
                 chunk = (
                     np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
                 )
-                async with self._audio_buffer_lock:
-                    self._audio_buffer = np.append(self._audio_buffer, chunk)
+                await self._append_audio_chunk(chunk)
                 await self._send_json(build_control("mic-audio-end"))
 
     async def _handle_audio_end(self, message: dict[str, Any]) -> None:
-        async with self._audio_buffer_lock:
-            audio_buffer = self._audio_buffer.copy()
-            self._audio_buffer = np.array([], dtype=np.float32)
+        audio_buffer = await self._drain_audio_buffer()
 
         if audio_buffer.size == 0:
             logger.debug("Ignoring `mic-audio-end` with empty buffer.")
@@ -348,6 +355,11 @@ class OLVPetPlatformAdapter(Platform):
 
         if not text:
             await self._send_json(build_error("The LLM can't hear you."))
+            return
+
+        should_drop, drop_reason = _should_drop_transcription(text)
+        if should_drop:
+            logger.info(f"Dropped transcription `{text}`: {drop_reason}")
             return
 
         await self._send_json({"type": "user-input-transcription", "text": text})
@@ -370,6 +382,30 @@ class OLVPetPlatformAdapter(Platform):
 
     def _prepare_audio_cache_dir(self) -> None:
         AUDIO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    async def _append_audio_chunk(self, chunk: np.ndarray) -> None:
+        if chunk.size == 0:
+            return
+
+        async with self._audio_buffer_lock:
+            self._audio_buffer_chunks.append(chunk)
+
+    async def _drain_audio_buffer(self) -> np.ndarray:
+        async with self._audio_buffer_lock:
+            if not self._audio_buffer_chunks:
+                return np.array([], dtype=np.float32)
+
+            chunks = self._audio_buffer_chunks
+            self._audio_buffer_chunks = []
+
+        if len(chunks) == 1:
+            return chunks[0].copy()
+
+        return np.concatenate(chunks).astype(np.float32, copy=False)
+
+    async def _clear_audio_buffer(self) -> None:
+        async with self._audio_buffer_lock:
+            self._audio_buffer_chunks = []
 
     def _cleanup_audio_cache(self) -> None:
         self._prepare_audio_cache_dir()
@@ -460,7 +496,7 @@ class OLVPetPlatformAdapter(Platform):
         finally:
             self._ws_client = None
             self.session_state.reset_to_idle()
-            self._audio_buffer = np.array([], dtype=np.float32)
+            await self._clear_audio_buffer()
             logger.info("Desktop frontend disconnected from OLV Pet Adapter.")
 
     async def emit_message_chain(
@@ -649,6 +685,10 @@ class OLVPetPlatformAdapter(Platform):
             "required_misses": int(_plugin_config_get(self._plugin_config, "vad_required_misses", 24)),
             "smoothing_window": int(_plugin_config_get(self._plugin_config, "vad_smoothing_window", 5)),
         }
+        self.image_cooldown_seconds = max(
+            int(_plugin_config_get(self._plugin_config, "image_cooldown_seconds", 60)),
+            0,
+        )
         self.live2d_model_name = _plugin_config_get(
             self._plugin_config, "live2d_model_name", ""
         )
@@ -846,10 +886,8 @@ class OLVPetPlatformAdapter(Platform):
 
         emotion_map = self.model_info.get("emotionMap") or {}
         motion_map = self.model_info.get("motionMap") or {}
-        emotion_map_keys = [
-            key for key in emotion_map.keys() if isinstance(key, str) and key
-        ]
-        decision = build_fallback_base_expression_decision(reply_text, emotion_map_keys)
+        action_map_keys = _collect_action_map_keys(motion_map, emotion_map)
+        decision = build_fallback_base_expression_decision(reply_text, action_map_keys)
         planner_error = None
         if self._selected_expression_provider is not None:
             try:
@@ -864,7 +902,7 @@ class OLVPetPlatformAdapter(Platform):
                     chatbuffer=self.chat_buffer.to_list(),
                     user_input=self.session_state.last_user_text,
                     reply_text=reply_text,
-                    emotion_map_keys=emotion_map_keys,
+                    emotion_map_keys=action_map_keys,
                 )
             except BaseExpressionPlanningError as exc:
                 planner_error = str(exc)
@@ -873,24 +911,37 @@ class OLVPetPlatformAdapter(Platform):
                 planner_error = str(exc)
                 logger.warning(f"Base expression planner failed, fallback to neutral: {exc}")
 
-        resolved_expressions = _resolve_action_asset_list(
-            emotion_map,
-            decision.base_expression,
-        )
-        resolved_expression = (
-            resolved_expressions[0] if resolved_expressions else "neutral"
-        )
         resolved_motions = _resolve_action_asset_list(
             motion_map,
             decision.base_expression,
+            allow_fallback=False,
         )
+        resolved_expressions = []
+        if not resolved_motions:
+            resolved_expressions = _resolve_action_asset_list(
+                emotion_map,
+                decision.base_expression,
+                allow_fallback=False,
+            )
+            if not resolved_expressions:
+                resolved_expressions = _resolve_action_asset_list(
+                    emotion_map,
+                    decision.base_expression,
+                )
 
-        actions: dict[str, Any] = {
-            "expressions": [resolved_expression],
-            "expression_decision": decision.to_payload(),
-        }
         if resolved_motions:
-            actions["motions"] = resolved_motions
+            actions: dict[str, Any] = {
+                "motions": resolved_motions,
+                "expression_decision": decision.to_payload(),
+            }
+        else:
+            resolved_expression = (
+                resolved_expressions[0] if resolved_expressions else "neutral"
+            )
+            actions = {
+                "expressions": [resolved_expression],
+                "expression_decision": decision.to_payload(),
+            }
         if planner_error:
             actions["expression_decision_error"] = planner_error
         return actions
@@ -910,6 +961,27 @@ class OLVPetPlatformAdapter(Platform):
                     os.remove(temp_path)
             except Exception as exc:
                 logger.warning(f"Failed to remove temp STT audio file {temp_path}: {exc}")
+
+    def _apply_image_cooldown(self, images: list[Any]) -> tuple[list[Any], int]:
+        if not images:
+            return [], 0
+
+        if self.image_cooldown_seconds <= 0:
+            self._last_accepted_image_at_monotonic = time.monotonic()
+            return images, 0
+
+        now = time.monotonic()
+        last_accepted = self._last_accepted_image_at_monotonic
+        if last_accepted is None or (now - last_accepted) >= self.image_cooldown_seconds:
+            self._last_accepted_image_at_monotonic = now
+            return images, 0
+
+        logger.info(
+            "Dropped %s image(s) due to cooldown window (%ss remaining approximately).",
+            len(images),
+            max(int(self.image_cooldown_seconds - (now - last_accepted)), 0),
+        )
+        return [], len(images)
 
     async def _handle_frontend_compat(self, message: dict[str, Any]) -> None:
         msg_type = message.get("type")
@@ -1114,7 +1186,29 @@ def _normalize_action_asset_list(value: Any) -> list[str]:
     return []
 
 
-def _resolve_action_asset_list(asset_map: Any, decision_key: str) -> list[str]:
+def _collect_action_map_keys(*asset_maps: Any) -> list[str]:
+    ordered_keys: list[str] = []
+    seen_keys: set[str] = set()
+
+    for asset_map in asset_maps:
+        if not isinstance(asset_map, dict):
+            continue
+        for raw_key in asset_map.keys():
+            normalized_key = _normalize_action_key(raw_key)
+            if not normalized_key or normalized_key in seen_keys:
+                continue
+            seen_keys.add(normalized_key)
+            ordered_keys.append(normalized_key)
+
+    return ordered_keys
+
+
+def _resolve_action_asset_list(
+    asset_map: Any,
+    decision_key: str,
+    *,
+    allow_fallback: bool = True,
+) -> list[str]:
     if not isinstance(asset_map, dict) or not asset_map:
         return []
 
@@ -1123,6 +1217,9 @@ def _resolve_action_asset_list(asset_map: Any, decision_key: str) -> list[str]:
         for key, value in asset_map.items():
             if _normalize_action_key(key) == normalized_key:
                 return _normalize_action_asset_list(value)
+
+    if not allow_fallback:
+        return []
 
     for value in asset_map.values():
         normalized_assets = _normalize_action_asset_list(value)
@@ -1145,6 +1242,41 @@ def _coerce_perf_counter(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
+
+
+def _should_drop_transcription(text: str) -> tuple[bool, str]:
+    normalized = (text or "").strip()
+    if not normalized:
+        return True, "empty transcription"
+
+    compact = re.sub(r"\s+", "", normalized)
+    if not compact:
+        return True, "empty transcription after whitespace cleanup"
+
+    meaningful_chars = re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", compact)
+    if len(meaningful_chars) < 2:
+        return True, "meaningful character count < 2"
+
+    allowed_symbol_pattern = r"[\u4e00-\u9fffA-Za-z0-9，。！？；：、,.!?;:'\"“”‘’（）()《》【】\-_~ ]"
+    noisy_chars = [
+        ch for ch in compact
+        if not re.match(allowed_symbol_pattern, ch)
+    ]
+    noisy_ratio = len(noisy_chars) / max(len(compact), 1)
+    if len(compact) >= 4 and noisy_ratio >= 0.45:
+        return True, f"noisy char ratio too high ({noisy_ratio:.2f})"
+
+    alnum_or_cjk = "".join(meaningful_chars)
+    if len(alnum_or_cjk) >= 4:
+        char_counter = Counter(alnum_or_cjk)
+        most_common_count = char_counter.most_common(1)[0][1]
+        if most_common_count / len(alnum_or_cjk) >= 0.8:
+            return True, "repeated character spam"
+
+    if re.fullmatch(r"([A-Za-z0-9\u4e00-\u9fff])\1{3,}", alnum_or_cjk):
+        return True, "single-character repetition"
+
+    return False, ""
 
 
 def _save_frontend_image_payload_to_local_path(
@@ -1349,7 +1481,7 @@ def _build_static_routes() -> dict[str, Path]:
         "/live2ds": LIVE2DS_DIR,
         "/bg": OLV_DIR / "backgrounds",
         "/avatars": OLV_DIR / "avatars",
-        "/cache": OLV_DIR / "cache",
+        "/cache": RUNTIME_CACHE_DIR,
     }
 
 

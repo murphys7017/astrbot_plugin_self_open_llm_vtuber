@@ -127,7 +127,9 @@ def build_base_expression_prompt(
     prompt_sections.append(
         '请只输出 JSON，格式为：{"semantic_expression":"...","base_expression":"...","reason":"..."}'
     )
-    return "\n\n".join(prompt_sections)
+    prompt = "\n\n".join(prompt_sections)
+    prompt = prompt + '\n /no_think'
+    return prompt
 
 
 def validate_base_expression_decision(
