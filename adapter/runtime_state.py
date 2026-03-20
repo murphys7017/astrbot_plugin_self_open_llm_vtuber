@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from typing import Any
 
 from astrbot.api import logger
@@ -8,7 +9,6 @@ from astrbot.api.provider import Provider, STTProvider
 
 from .model_info import parse_model_info
 from .payload_builder import build_set_model_and_conf
-from .plugin_runtime import get_plugin_config, get_plugin_context
 
 
 class RuntimeState:
@@ -16,6 +16,8 @@ class RuntimeState:
         self,
         *,
         platform_config: Any,
+        plugin_context: Any,
+        plugin_config: Any,
         host: str,
         http_port: int,
         client_uid: str,
@@ -27,8 +29,8 @@ class RuntimeState:
         self.client_uid = client_uid
         self.live2ds_dir = live2ds_dir
 
-        self.plugin_config = get_plugin_config() or {}
-        self.plugin_context = get_plugin_context()
+        self.plugin_config = self._clone_plugin_config(plugin_config)
+        self.plugin_context = plugin_context
 
         self.stt_provider_id = ""
         self.expression_provider_id = ""
@@ -82,10 +84,9 @@ class RuntimeState:
         logger.info("Loaded default persona: %s", self.default_persona["name"])
 
     def refresh(self) -> bool:
-        latest_plugin_config = get_plugin_config()
+        latest_plugin_config = self._load_plugin_config_from_source(self.plugin_config)
         if latest_plugin_config is not None:
             self.plugin_config = latest_plugin_config
-        self.plugin_context = get_plugin_context()
 
         previous_stt_provider_id = self.stt_provider_id
         previous_expression_provider_id = self.expression_provider_id
@@ -267,6 +268,34 @@ class RuntimeState:
             value = getattr(config, key)
             return default if value is None else value
         return default
+
+    @staticmethod
+    def _clone_plugin_config(config: Any) -> Any:
+        if config is None:
+            return {}
+        try:
+            return deepcopy(config)
+        except Exception:
+            return config
+
+    @staticmethod
+    def _load_plugin_config_from_source(config: Any) -> Any:
+        if config is None:
+            return None
+
+        config_path = getattr(config, "config_path", None)
+        if not isinstance(config_path, str) or not config_path:
+            return RuntimeState._clone_plugin_config(config)
+
+        try:
+            with open(config_path, encoding="utf-8-sig") as f:
+                data = json.load(f)
+        except Exception:
+            return RuntimeState._clone_plugin_config(config)
+
+        if not isinstance(data, dict):
+            return RuntimeState._clone_plugin_config(config)
+        return data
 
 
 def _plugin_config_get(config: Any, key: str, default: Any) -> Any:

@@ -24,6 +24,7 @@ from .adapter.runtime_state import RuntimeState
 from .adapter.session_state import SessionState
 from .adapter.transport_ws import WebSocketTransport
 from .adapter.turn_coordinator import TurnCoordinator
+from .adapter.plugin_runtime import get_plugin_config, get_plugin_context
 from .platform_event import OLVPetPlatformEvent
 from .static_resources import StaticResourceServer
 
@@ -67,8 +68,12 @@ class OLVPetPlatformAdapter(Platform):
         self.conf_uid = _config_get(self.config, "conf_uid", "astrbot-desktop")
         self.speaker_name = _config_get(self.config, "speaker_name", "AstrBot")
         self.auto_start_mic = bool(_config_get(self.config, "auto_start_mic", True))
+        self._plugin_context = get_plugin_context()
+        self._plugin_config = get_plugin_config() or {}
         self.runtime_state = RuntimeState(
             platform_config=self.config,
+            plugin_context=self._plugin_context,
+            plugin_config=self._plugin_config,
             host=self.host,
             http_port=self.http_port,
             client_uid=self.client_uid,

@@ -12,17 +12,18 @@ from .adapter.inline_expression import (
     collect_available_base_expressions,
     extract_inline_base_expression,
 )
-from .adapter.plugin_runtime import get_plugin_config
 
 
 class MyPlugin(Star):
     def __init__(self, context: Context, config: dict | None = None):
-        super().__init__(context, config)
+        super().__init__(context)
         from .adapter.plugin_runtime import set_plugin_config, set_plugin_context
 
+        self.context = context
+        self.config = config if config is not None else {}
         _configure_noisy_loggers()
         set_plugin_context(context)
-        set_plugin_config(config if config is not None else {})
+        set_plugin_config(self.config)
         # Import solely for side effect: the class decorator registers the adapter.
         from .platform_adapter import OLVPetPlatformAdapter  # noqa: F401
 
@@ -35,7 +36,7 @@ class MyPlugin(Star):
         if event.get_platform_id() != "olv_pet_adapter":
             return
 
-        plugin_config = get_plugin_config() or {}
+        plugin_config = self.config if self.config is not None else {}
         selected_model_name = ""
         if hasattr(plugin_config, "get"):
             selected_model_name = str(plugin_config.get("live2d_model_name", "") or "")
@@ -73,7 +74,7 @@ class MyPlugin(Star):
         if resp.is_chunk:
             return
 
-        plugin_config = get_plugin_config() or {}
+        plugin_config = self.config if self.config is not None else {}
         selected_model_name = ""
         if hasattr(plugin_config, "get"):
             selected_model_name = str(plugin_config.get("live2d_model_name", "") or "")
