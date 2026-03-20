@@ -49,7 +49,6 @@ IMAGE_CACHE_DIR = RUNTIME_CACHE_DIR / "images"
         "speaker_name": "AstrBot",
         "model_info_json": "{}",
         "auto_start_mic": True,
-        "vad_model": "silero_vad",
     },
 )
 class OLVPetPlatformAdapter(Platform):
