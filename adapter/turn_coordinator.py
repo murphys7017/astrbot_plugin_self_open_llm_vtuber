@@ -1,0 +1,622 @@
+from __future__ import annotations
+
+import asyncio
+from collections import Counter
+import os
+import re
+import time
+from typing import Any, Awaitable, Callable
+
+import numpy as np
+
+from astrbot.api import logger
+from astrbot.api.message_components import Image, Plain, Record
+
+from .base_expression_planner import (
+    BaseExpressionPlanningError,
+    build_fallback_base_expression_decision,
+    plan_base_expression,
+)
+from .payload_builder import (
+    build_audio_payload,
+    build_backend_synth_complete,
+    build_control,
+    build_error,
+    build_force_new_message,
+    build_full_text,
+)
+from .protocol import ProtocolError
+
+
+class TurnCoordinator:
+    def __init__(
+        self,
+        *,
+        session_state,
+        runtime_state,
+        media_service,
+        chat_buffer,
+        speaker_name: str,
+        convert_message: Callable[[dict[str, Any]], Any],
+        build_message_object: Callable[..., Any],
+        handle_frontend_compat: Callable[[dict[str, Any]], Awaitable[None]],
+        refresh_runtime_settings: Callable[[], None],
+        send_current_model_and_conf: Callable[[], Awaitable[None]],
+        send_json: Callable[[dict[str, Any]], Awaitable[bool]],
+        build_platform_event: Callable[[Any], Any],
+        commit_event: Callable[[Any], None],
+        ensure_vad_engine: Callable[[], Any],
+    ) -> None:
+        self.session_state = session_state
+        self.runtime_state = runtime_state
+        self.media_service = media_service
+        self.chat_buffer = chat_buffer
+        self.speaker_name = speaker_name
+        self._convert_message = convert_message
+        self._build_message_object = build_message_object
+        self._handle_frontend_compat = handle_frontend_compat
+        self._refresh_runtime_settings = refresh_runtime_settings
+        self._send_current_model_and_conf = send_current_model_and_conf
+        self._send_json = send_json
+        self._build_platform_event = build_platform_event
+        self._commit_event = commit_event
+        self._ensure_vad_engine = ensure_vad_engine
+
+        self._turn_lock = asyncio.Lock()
+        self._turn_timing: dict[str, Any] = {}
+        self._turn_expression_cache: dict[str, Any] = {}
+
+    async def handle_msg(self, message: dict[str, Any]) -> None:
+        msg_type = message.get("type")
+
+        if msg_type in {
+            "fetch-backgrounds",
+            "fetch-configs",
+            "fetch-history-list",
+            "create-new-history",
+            "fetch-and-set-history",
+            "delete-history",
+            "switch-config",
+            "request-init-config",
+            "heartbeat",
+            "audio-play-start",
+        }:
+            await self._handle_frontend_compat(message)
+            return
+
+        if msg_type == "frontend-playback-complete":
+            await self.finalize_turn()
+            return
+
+        if msg_type == "mic-audio-data":
+            await self._handle_audio_data(message)
+            return
+
+        if msg_type == "raw-audio-data":
+            await self._handle_raw_audio_data(message)
+            return
+
+        if msg_type == "mic-audio-end":
+            await self._handle_audio_end(message)
+            return
+
+        try:
+            message_obj = self._convert_message(message)
+        except ProtocolError as exc:
+            logger.debug("Ignoring unsupported OLV message: %s", exc)
+            return
+
+        await self._commit_inbound_message(message_obj)
+
+    async def emit_message_chain(
+        self,
+        message_chain,
+        unified_msg_origin: str | None = None,
+    ) -> None:
+        del unified_msg_origin
+
+        emit_started_at = time.perf_counter()
+        self._mark_turn_timing("emit_started_at", emit_started_at)
+        texts, picture_paths, record_paths = _extract_outbound_message_parts(message_chain)
+        logger.debug("Emitting message chain: %s", message_chain)
+
+        reply_text = "\n".join(texts).strip()
+        has_audio_reply = bool(record_paths)
+        if self._should_skip_duplicate_plain_emit(
+            reply_text=reply_text,
+            has_audio_reply=has_audio_reply,
+        ):
+            logger.info(
+                "Skip duplicate dual-output plain emit: turn=%s text=%s",
+                self._current_turn_index(),
+                reply_text[:120],
+            )
+            return
+
+        if reply_text and not has_audio_reply:
+            self.chat_buffer.add("assistant", reply_text)
+            await self._send_json(build_full_text(reply_text))
+
+        actions = {}
+        expression_started_at = time.perf_counter()
+        if reply_text:
+            try:
+                expr_actions = await self._get_or_build_expression_actions(
+                    reply_text=reply_text,
+                    has_audio_reply=has_audio_reply,
+                )
+                if expr_actions:
+                    actions.update(expr_actions)
+            except Exception as exc:
+                logger.warning("Failed to build expression actions: %s", exc)
+        expression_elapsed_ms = (time.perf_counter() - expression_started_at) * 1000.0
+        self._mark_turn_timing("expression_completed_at")
+
+        if picture_paths:
+            actions["pictures"] = picture_paths
+
+        actions_to_send = actions if actions else None
+
+        if has_audio_reply:
+            record_path = record_paths[0]
+            audio_cache_started_at = time.perf_counter()
+            cached_audio_path, audio_url = self.media_service.cache_audio_file(record_path)
+            audio_cache_elapsed_ms = (time.perf_counter() - audio_cache_started_at) * 1000.0
+            await self._send_json(
+                build_audio_payload(
+                    audio_path=cached_audio_path,
+                    audio_url=audio_url,
+                    text=reply_text,
+                    speaker_name=self.speaker_name,
+                    avatar="",
+                    action_mapping=actions_to_send,
+                )
+            )
+            self._mark_turn_timing("audio_payload_sent_at")
+            await self._send_json(build_backend_synth_complete())
+            self.session_state.mark_playing()
+            if self._turn_expression_cache:
+                self._turn_expression_cache["audio_sent"] = True
+            logger.info(
+                "Turn timing: turn=%s pipeline_before_emit_ms=%.1f expression_ms=%.1f "
+                "audio_cache_ms=%.1f total_before_playback_ms=%.1f has_audio=%s pictures=%d",
+                self._current_turn_index(),
+                self._elapsed_ms("event_committed_at", "emit_started_at"),
+                expression_elapsed_ms,
+                audio_cache_elapsed_ms,
+                self._elapsed_ms("received_at", "audio_payload_sent_at"),
+                True,
+                len(picture_paths),
+            )
+            return
+
+        if actions_to_send:
+            await self._send_json(
+                build_audio_payload(
+                    audio_path="",
+                    audio_url=None,
+                    text=reply_text,
+                    speaker_name=self.speaker_name,
+                    avatar="",
+                    action_mapping=actions_to_send,
+                )
+            )
+            self._mark_turn_timing("audio_payload_sent_at")
+
+        if reply_text:
+            self.session_state.reset_to_idle()
+            await self._send_json(build_backend_synth_complete())
+            await self._send_json(build_force_new_message())
+            await self._send_json(build_control("conversation-chain-end"))
+            self._mark_turn_timing("turn_completed_at")
+            logger.info(
+                "Turn timing: turn=%s pipeline_before_emit_ms=%.1f expression_ms=%.1f "
+                "total_ms=%.1f has_audio=%s pictures=%d",
+                self._current_turn_index(),
+                self._elapsed_ms("event_committed_at", "emit_started_at"),
+                expression_elapsed_ms,
+                self._elapsed_ms("received_at", "turn_completed_at"),
+                False,
+                len(picture_paths),
+            )
+
+    async def finalize_turn(self) -> None:
+        if not self.session_state.waiting_for_playback_complete:
+            return
+        await self._send_json(build_force_new_message())
+        await self._send_json(build_control("conversation-chain-end"))
+        self.session_state.mark_playback_complete()
+        self._mark_turn_timing("playback_completed_at")
+        logger.info(
+            "Turn timing playback: turn=%s playback_ms=%.1f total_ms=%.1f",
+            self._current_turn_index(),
+            self._elapsed_ms("audio_payload_sent_at", "playback_completed_at"),
+            self._elapsed_ms("received_at", "playback_completed_at"),
+        )
+
+    async def _commit_inbound_message(self, message_obj) -> None:
+        async with self._turn_lock:
+            self._refresh_runtime_settings()
+            await self._send_current_model_and_conf()
+            if self.session_state.waiting_for_playback_complete:
+                await self.finalize_turn()
+
+            self.session_state.begin_turn(message_obj.message_str)
+            self._begin_turn_timing(message_obj.message_str)
+            self._turn_expression_cache = {}
+            self.chat_buffer.add("user", message_obj.message_str)
+            await self._send_json(build_control("conversation-chain-start"))
+
+            event = self._build_platform_event(message_obj)
+            self._commit_event(event)
+            self._mark_turn_timing("event_committed_at")
+            logger.info(
+                "Turn timing start: turn=%s text_len=%d",
+                self._current_turn_index(),
+                len(message_obj.message_str or ""),
+            )
+
+    async def _handle_audio_data(self, message: dict[str, Any]) -> None:
+        audio_data = message.get("audio", [])
+        if not isinstance(audio_data, list) or not audio_data:
+            return
+
+        chunk = np.array(audio_data, dtype=np.float32)
+        await self.media_service.append_audio_chunk(chunk)
+
+    async def _handle_raw_audio_data(self, message: dict[str, Any]) -> None:
+        audio_data = message.get("audio", [])
+        if not isinstance(audio_data, list) or not audio_data:
+            return
+
+        try:
+            vad_engine = self._ensure_vad_engine()
+        except Exception as exc:
+            logger.error("Failed to initialize VAD engine: %s", exc)
+            await self._send_json(build_error(f"VAD unavailable: {exc}"))
+            return
+
+        for audio_bytes in vad_engine.detect_speech(audio_data):
+            if audio_bytes == b"<|PAUSE|>":
+                await self._send_json(build_control("interrupt"))
+            elif audio_bytes == b"<|RESUME|>":
+                continue
+            elif len(audio_bytes) > 1024:
+                chunk = (
+                    np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+                )
+                await self.media_service.append_audio_chunk(chunk)
+                await self._send_json(build_control("mic-audio-end"))
+
+    async def _handle_audio_end(self, message: dict[str, Any]) -> None:
+        audio_buffer = await self.media_service.drain_audio_buffer()
+
+        if audio_buffer.size == 0:
+            logger.debug("Ignoring `mic-audio-end` with empty buffer.")
+            return
+
+        try:
+            text = (await self._transcribe_audio(audio_buffer)).strip()
+        except Exception as exc:
+            logger.error("Audio transcription failed: %s", exc)
+            await self._send_json(build_error(f"Audio transcription failed: {exc}"))
+            return
+
+        if not text:
+            await self._send_json(build_error("The LLM can't hear you."))
+            return
+
+        should_drop, drop_reason = _should_drop_transcription(text)
+        if should_drop:
+            logger.info("Dropped transcription `%s`: %s", text, drop_reason)
+            return
+
+        await self._send_json({"type": "user-input-transcription", "text": text})
+
+        raw_message = dict(message)
+        raw_message["transcription"] = text
+        raw_message["audio_sample_count"] = int(audio_buffer.size)
+        message_obj = self._build_message_object(text=text, raw_message=raw_message)
+        await self._commit_inbound_message(message_obj)
+
+    def _current_turn_index(self) -> int:
+        return int(getattr(self.session_state, "turn_index", 0) or 0)
+
+    def _begin_turn_timing(self, user_text: str) -> None:
+        self._turn_timing = {
+            "turn_index": self._current_turn_index(),
+            "received_at": time.perf_counter(),
+            "user_text_len": len(user_text or ""),
+        }
+
+    def _mark_turn_timing(
+        self,
+        key: str,
+        value: float | None = None,
+    ) -> None:
+        if not self._turn_timing:
+            self._turn_timing = {"turn_index": self._current_turn_index()}
+        self._turn_timing[key] = time.perf_counter() if value is None else value
+
+    def _elapsed_ms(self, start_key: str, end_key: str) -> float:
+        start_value = _coerce_perf_counter(self._turn_timing.get(start_key))
+        end_value = _coerce_perf_counter(self._turn_timing.get(end_key))
+        if start_value is None or end_value is None:
+            return -1.0
+        return max((end_value - start_value) * 1000.0, 0.0)
+
+    async def _get_or_build_expression_actions(
+        self,
+        *,
+        reply_text: str,
+        has_audio_reply: bool,
+    ) -> dict[str, Any] | None:
+        cache_key = (reply_text or "").strip()
+        if not cache_key:
+            return None
+
+        cached_reply_text = self._turn_expression_cache.get("reply_text")
+        cached_actions = self._turn_expression_cache.get("actions")
+        if cached_reply_text == cache_key and isinstance(cached_actions, dict):
+            logger.debug(
+                "Reusing cached expression actions for turn=%s has_audio=%s",
+                self._current_turn_index(),
+                has_audio_reply,
+            )
+            return dict(cached_actions)
+
+        actions = await self._build_expression_actions(cache_key)
+        if isinstance(actions, dict):
+            self._turn_expression_cache = {
+                "reply_text": cache_key,
+                "actions": dict(actions),
+                "has_audio_reply": has_audio_reply,
+                "audio_sent": False,
+            }
+        return actions
+
+    def _should_skip_duplicate_plain_emit(
+        self,
+        *,
+        reply_text: str,
+        has_audio_reply: bool,
+    ) -> bool:
+        if has_audio_reply:
+            return False
+
+        cache_key = (reply_text or "").strip()
+        if not cache_key:
+            return False
+
+        cached_reply_text = self._turn_expression_cache.get("reply_text")
+        cached_has_audio_reply = bool(self._turn_expression_cache.get("has_audio_reply"))
+        cached_audio_sent = bool(self._turn_expression_cache.get("audio_sent"))
+        return (
+            cached_reply_text == cache_key
+            and cached_has_audio_reply
+            and cached_audio_sent
+        )
+
+    async def _build_expression_actions(self, reply_text: str) -> dict[str, Any] | None:
+        if not reply_text:
+            return None
+
+        emotion_map = self.runtime_state.model_info.get("emotionMap") or {}
+        motion_map = self.runtime_state.model_info.get("motionMap") or {}
+        action_map_keys = _collect_action_map_keys(motion_map, emotion_map)
+        decision = build_fallback_base_expression_decision(reply_text, action_map_keys)
+        planner_error = None
+        if self.runtime_state.selected_expression_provider is not None:
+            try:
+                provider_id = self.runtime_state.selected_expression_provider.meta().id
+            except Exception:
+                provider_id = "<unknown>"
+            logger.debug("Planning base expression with provider: %s", provider_id)
+            try:
+                decision = await plan_base_expression(
+                    self.runtime_state.selected_expression_provider,
+                    persona=self.runtime_state.default_persona,
+                    chatbuffer=self.chat_buffer.to_list(),
+                    user_input=self.session_state.last_user_text,
+                    reply_text=reply_text,
+                    emotion_map_keys=action_map_keys,
+                )
+            except BaseExpressionPlanningError as exc:
+                planner_error = str(exc)
+                logger.warning(
+                    "Base expression planner validation failed, fallback to neutral: %s",
+                    exc,
+                )
+            except Exception as exc:
+                planner_error = str(exc)
+                logger.warning("Base expression planner failed, fallback to neutral: %s", exc)
+
+        resolved_motions = _resolve_action_asset_list(
+            motion_map,
+            decision.base_expression,
+            allow_fallback=False,
+        )
+        resolved_expressions = []
+        if not resolved_motions:
+            resolved_expressions = _resolve_action_asset_list(
+                emotion_map,
+                decision.base_expression,
+                allow_fallback=False,
+            )
+            if not resolved_expressions:
+                resolved_expressions = _resolve_action_asset_list(
+                    emotion_map,
+                    decision.base_expression,
+                )
+
+        if resolved_motions:
+            actions: dict[str, Any] = {
+                "motions": resolved_motions,
+                "expression_decision": decision.to_payload(),
+            }
+        else:
+            resolved_expression = resolved_expressions[0] if resolved_expressions else "neutral"
+            actions = {
+                "expressions": [resolved_expression],
+                "expression_decision": decision.to_payload(),
+            }
+        if planner_error:
+            actions["expression_decision_error"] = planner_error
+        return actions
+
+    async def _transcribe_audio(self, audio_buffer: np.ndarray) -> str:
+        if self.runtime_state.selected_stt_provider is None:
+            raise RuntimeError(
+                "No STT provider available. Please configure `stt_provider_id` in plugin config or set a default AstrBot STT provider."
+            )
+
+        temp_path = self.media_service.save_audio_buffer_to_temp_wav(audio_buffer)
+        try:
+            return await self.runtime_state.selected_stt_provider.get_text(temp_path)
+        finally:
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except Exception as exc:
+                logger.warning("Failed to remove temp STT audio file %s: %s", temp_path, exc)
+
+
+def _iter_message_chain(message_chain) -> list[Any]:
+    if message_chain is None:
+        return []
+    if hasattr(message_chain, "chain") and isinstance(message_chain.chain, list):
+        return message_chain.chain
+    if isinstance(message_chain, list):
+        return message_chain
+    return [message_chain]
+
+
+def _extract_outbound_message_parts(message_chain) -> tuple[list[str], list[str], list[str]]:
+    texts: list[str] = []
+    picture_paths: list[str] = []
+    record_paths: list[str] = []
+
+    for component in _iter_message_chain(message_chain):
+        component_text = getattr(component, "text", None)
+        if isinstance(component, Plain) and isinstance(component_text, str) and component_text.strip():
+            texts.append(component_text.strip())
+            continue
+
+        image_path = getattr(component, "file", None)
+        if isinstance(component, Image) and isinstance(image_path, str) and image_path:
+            picture_paths.append(image_path)
+            continue
+
+        if not isinstance(component, Record):
+            continue
+
+        if isinstance(component_text, str) and component_text.strip():
+            texts.append(component_text.strip())
+
+        if isinstance(image_path, str) and image_path:
+            record_paths.append(image_path)
+
+    return texts, picture_paths, record_paths
+
+
+def _normalize_action_key(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip().lower()
+
+
+def _normalize_action_asset_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        asset = value.strip()
+        return [asset] if asset else []
+    if isinstance(value, list):
+        return [
+            item.strip()
+            for item in value
+            if isinstance(item, str) and item.strip()
+        ]
+    return []
+
+
+def _collect_action_map_keys(*asset_maps: Any) -> list[str]:
+    ordered_keys: list[str] = []
+    seen_keys: set[str] = set()
+
+    for asset_map in asset_maps:
+        if not isinstance(asset_map, dict):
+            continue
+        for raw_key in asset_map.keys():
+            normalized_key = _normalize_action_key(raw_key)
+            if not normalized_key or normalized_key in seen_keys:
+                continue
+            seen_keys.add(normalized_key)
+            ordered_keys.append(normalized_key)
+
+    return ordered_keys
+
+
+def _resolve_action_asset_list(
+    asset_map: Any,
+    decision_key: str,
+    *,
+    allow_fallback: bool = True,
+) -> list[str]:
+    if not isinstance(asset_map, dict) or not asset_map:
+        return []
+
+    normalized_key = _normalize_action_key(decision_key)
+    if normalized_key:
+        for key, value in asset_map.items():
+            if _normalize_action_key(key) == normalized_key:
+                return _normalize_action_asset_list(value)
+
+    if not allow_fallback:
+        return []
+
+    for value in asset_map.values():
+        normalized_assets = _normalize_action_asset_list(value)
+        if normalized_assets:
+            return normalized_assets
+
+    return []
+
+
+def _coerce_perf_counter(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _should_drop_transcription(text: str) -> tuple[bool, str]:
+    normalized = (text or "").strip()
+    if not normalized:
+        return True, "empty transcription"
+
+    compact = re.sub(r"\s+", "", normalized)
+    if not compact:
+        return True, "empty transcription after whitespace cleanup"
+
+    meaningful_chars = re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", compact)
+    if len(meaningful_chars) < 2:
+        return True, "meaningful character count < 2"
+
+    allowed_symbol_pattern = r"[\u4e00-\u9fffA-Za-z0-9，。！？；：、,.!?;:'\"“”‘’（）()《》【】\-_~ ]"
+    noisy_chars = [
+        ch for ch in compact
+        if not re.match(allowed_symbol_pattern, ch)
+    ]
+    noisy_ratio = len(noisy_chars) / max(len(compact), 1)
+    if len(compact) >= 4 and noisy_ratio >= 0.45:
+        return True, f"noisy char ratio too high ({noisy_ratio:.2f})"
+
+    alnum_or_cjk = "".join(meaningful_chars)
+    if len(alnum_or_cjk) >= 4:
+        char_counter = Counter(alnum_or_cjk)
+        most_common_count = char_counter.most_common(1)[0][1]
+        if most_common_count / len(alnum_or_cjk) >= 0.8:
+            return True, "repeated character spam"
+
+    if re.fullmatch(r"([A-Za-z0-9\u4e00-\u9fff])\1{3,}", alnum_or_cjk):
+        return True, "single-character repetition"
+
+    return False, ""
