@@ -26,6 +26,8 @@
 
 ![2](docs/img/2.png)
 
+## TODO
+motion_catalog.json 给前端有问题，明天再修，今天要熬穿了
 ## 当前项目定位
 
 和前端仓库当前 README 对齐后，可以把这个后端理解为：
