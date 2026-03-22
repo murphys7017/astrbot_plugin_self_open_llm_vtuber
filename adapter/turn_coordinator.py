@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-from collections import Counter
-import os
-import re
 import time
 from typing import Any, Awaitable, Callable
 
-import numpy as np
-
 from astrbot.api import logger
 from astrbot.api.message_components import Image, Plain, Record
+from astrbot.core.platform.message_session import MessageSession
+from astrbot.core.platform.message_type import MessageType
+from astrbot.core.utils.active_event_registry import active_event_registry
 
 from .expression_action_builder import build_expression_actions
+from .inline_expression import normalize_base_expression_key
 from .payload_builder import (
     build_audio_payload,
     build_backend_synth_complete,
@@ -22,6 +21,7 @@ from .payload_builder import (
     build_full_text,
 )
 from .protocol import ProtocolError
+from .speech_ingress import SpeechIngressService
 
 
 class TurnCoordinator:
@@ -57,6 +57,13 @@ class TurnCoordinator:
         self._build_platform_event = build_platform_event
         self._commit_event = commit_event
         self._ensure_vad_engine = ensure_vad_engine
+        self.speech_ingress = SpeechIngressService(
+            media_service=self.media_service,
+            runtime_state=self.runtime_state,
+            ensure_vad_engine=self._ensure_vad_engine,
+            send_json=self._send_json,
+            build_message_object=self._build_message_object,
+        )
 
         self._turn_lock = asyncio.Lock()
         self._turn_timing: dict[str, Any] = {}
@@ -82,6 +89,10 @@ class TurnCoordinator:
 
         if msg_type == "frontend-playback-complete":
             await self.finalize_turn()
+            return
+
+        if msg_type == "interrupt-signal":
+            await self._handle_interrupt_signal()
             return
 
         if msg_type == "mic-audio-data":
@@ -254,70 +265,58 @@ class TurnCoordinator:
             )
 
     async def _handle_audio_data(self, message: dict[str, Any]) -> None:
-        audio_data = message.get("audio", [])
-        if not isinstance(audio_data, list) or not audio_data:
-            return
-
-        chunk = np.array(audio_data, dtype=np.float32)
-        await self.media_service.append_audio_chunk(chunk)
+        await self.speech_ingress.handle_audio_data(message)
 
     async def _handle_raw_audio_data(self, message: dict[str, Any]) -> None:
-        audio_data = message.get("audio", [])
-        if not isinstance(audio_data, list) or not audio_data:
-            return
-
-        try:
-            vad_engine = self._ensure_vad_engine()
-        except Exception as exc:
-            logger.error("Failed to initialize VAD engine: %s", exc)
-            await self._send_json(build_error(f"VAD unavailable: {exc}"))
-            return
-
-        for audio_bytes in vad_engine.detect_speech(audio_data):
-            if audio_bytes == b"<|PAUSE|>":
-                await self._send_json(build_control("interrupt"))
-            elif audio_bytes == b"<|RESUME|>":
-                continue
-            elif len(audio_bytes) > 1024:
-                chunk = (
-                    np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-                )
-                await self.media_service.append_audio_chunk(chunk)
-                await self._send_json(build_control("mic-audio-end"))
+        await self.speech_ingress.handle_raw_audio_data(message)
 
     async def _handle_audio_end(self, message: dict[str, Any]) -> None:
-        audio_buffer = await self.media_service.drain_audio_buffer()
-
-        if audio_buffer.size == 0:
-            logger.debug("Ignoring `mic-audio-end` with empty buffer.")
+        message_obj = await self.speech_ingress.handle_audio_end(message)
+        if message_obj is None:
             return
-
-        try:
-            text = (await self._transcribe_audio(audio_buffer)).strip()
-        except Exception as exc:
-            logger.error("Audio transcription failed: %s", exc)
-            await self._send_json(build_error(f"Audio transcription failed: {exc}"))
-            return
-
-        if not text:
-            await self._send_json(build_error("The LLM can't hear you."))
-            return
-
-        should_drop, drop_reason = _should_drop_transcription(text)
-        if should_drop:
-            logger.info("Dropped transcription `%s`: %s", text, drop_reason)
-            return
-
-        await self._send_json({"type": "user-input-transcription", "text": text})
-
-        raw_message = dict(message)
-        raw_message["transcription"] = text
-        raw_message["audio_sample_count"] = int(audio_buffer.size)
-        message_obj = self._build_message_object(text=text, raw_message=raw_message)
         await self._commit_inbound_message(message_obj)
+
+    async def _handle_interrupt_signal(self) -> None:
+        umo = self._build_current_unified_msg_origin()
+        stopped_count = 0
+
+        plugin_context = getattr(self.runtime_state, "plugin_context", None)
+        agent_runner_type = ""
+        if plugin_context is not None:
+            try:
+                cfg = plugin_context.get_config(umo=umo)
+                provider_settings = cfg.get("provider_settings", {}) if isinstance(cfg, dict) else {}
+                agent_runner_type = str(provider_settings.get("agent_runner_type", "") or "")
+            except Exception as exc:
+                logger.warning("Failed to resolve agent runner type for interrupt: %s", exc)
+
+        if agent_runner_type in {"dify", "coze"}:
+            stopped_count = active_event_registry.stop_all(umo)
+        else:
+            stopped_count = active_event_registry.request_agent_stop_all(umo)
+            stopped_count = max(stopped_count, active_event_registry.stop_all(umo))
+
+        self.session_state.reset_to_idle()
+        await self.media_service.clear_audio_buffer()
+
+        logger.info(
+            "Processed interrupt-signal for turn=%s stopped_events=%s umo=%s",
+            self._current_turn_index(),
+            stopped_count,
+            umo,
+        )
 
     def _current_turn_index(self) -> int:
         return int(getattr(self.session_state, "turn_index", 0) or 0)
+
+    def _build_current_unified_msg_origin(self) -> str:
+        return str(
+            MessageSession(
+                platform_name="olv_pet_adapter",
+                message_type=MessageType.FRIEND_MESSAGE,
+                session_id=self.session_state.client_uid,
+            )
+        )
 
     def _begin_turn_timing(self, user_text: str) -> None:
         self._turn_timing = {
@@ -420,23 +419,6 @@ class TurnCoordinator:
             inline_base_expression=inline_base_expression,
         )
 
-    async def _transcribe_audio(self, audio_buffer: np.ndarray) -> str:
-        if self.runtime_state.selected_stt_provider is None:
-            raise RuntimeError(
-                "No STT provider available. Please configure `stt_provider_id` in plugin config or set a default AstrBot STT provider."
-            )
-
-        temp_path = self.media_service.save_audio_buffer_to_temp_wav(audio_buffer)
-        try:
-            return await self.runtime_state.selected_stt_provider.get_text(temp_path)
-        finally:
-            try:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-            except Exception as exc:
-                logger.warning("Failed to remove temp STT audio file %s: %s", temp_path, exc)
-
-
 def _iter_message_chain(message_chain) -> list[Any]:
     if message_chain is None:
         return []
@@ -478,38 +460,3 @@ def _coerce_perf_counter(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     return None
-
-
-def _should_drop_transcription(text: str) -> tuple[bool, str]:
-    normalized = (text or "").strip()
-    if not normalized:
-        return True, "empty transcription"
-
-    compact = re.sub(r"\s+", "", normalized)
-    if not compact:
-        return True, "empty transcription after whitespace cleanup"
-
-    meaningful_chars = re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", compact)
-    if len(meaningful_chars) < 2:
-        return True, "meaningful character count < 2"
-
-    allowed_symbol_pattern = r"[\u4e00-\u9fffA-Za-z0-9，。！？；：、,.!?;:'\"“”‘’（）()《》【】\-_~ ]"
-    noisy_chars = [
-        ch for ch in compact
-        if not re.match(allowed_symbol_pattern, ch)
-    ]
-    noisy_ratio = len(noisy_chars) / max(len(compact), 1)
-    if len(compact) >= 4 and noisy_ratio >= 0.45:
-        return True, f"noisy char ratio too high ({noisy_ratio:.2f})"
-
-    alnum_or_cjk = "".join(meaningful_chars)
-    if len(alnum_or_cjk) >= 4:
-        char_counter = Counter(alnum_or_cjk)
-        most_common_count = char_counter.most_common(1)[0][1]
-        if most_common_count / len(alnum_or_cjk) >= 0.8:
-            return True, "repeated character spam"
-
-    if re.fullmatch(r"([A-Za-z0-9\u4e00-\u9fff])\1{3,}", alnum_or_cjk):
-        return True, "single-character repetition"
-
-    return False, ""
