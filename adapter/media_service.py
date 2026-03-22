@@ -254,6 +254,13 @@ class MediaService:
         if not image_bytes:
             return None
 
+        if len(image_bytes) > FRONTEND_IMAGE_MAX_BYTES:
+            logger.warning(
+                "Rejected frontend image larger than %s bytes.",
+                FRONTEND_IMAGE_MAX_BYTES,
+            )
+            return None
+
         self.image_cache_dir.mkdir(parents=True, exist_ok=True)
         suffix = mimetypes.guess_extension(mime_type or "") or ".png"
         if suffix == ".jpe":

@@ -112,9 +112,11 @@ npm run dev:web
 ### `live2d_model_name`
 
 - 指定启动时加载的 Live2D 模型名称
+- 默认值：`Mk6_1.0`
 - 当前常用值：
   - `mao_pro`
   - `Mk6_1.0`
+- 运行时会优先按这个字段选择 `live2ds/model_dict.json` 中的模型信息
 
 ### `stt_provider_id`
 
@@ -132,7 +134,7 @@ npm run dev:web
 
 - 注入给主模型的 `motion_id` 候选上限
 - 默认值：`8`
-- 设为 `0` 表示不限制（会给出模型全部 `motionMap` 键）
+- 设为 `0` 表示不限制（会给出 `motion_catalog` 和 `motionMap` 的全部候选）
 - 若存在 `live2ds/<model_name>/motion_catalog.json`，会自动注入其中的动作语义描述
 - 且可直接选择 `motion_catalog` 内的 `id`（如 `smirk_tilt`），后端会按 catalog 的 `file` 播放动作
 
@@ -249,7 +251,9 @@ npm run dev
 
 运行时选择链路为：
 
-1. 优先使用 `motion_id`（仅当命中当前模型 `motionMap` 且可解析资源）
+1. 优先使用 `motion_id`
+   - 若命中当前模型 `motion_catalog` 且可解析到 `file`，优先按 catalog 播放
+   - 否则再尝试命中当前模型 `motionMap`
 2. `motion_id` 无效时，退回 `base_expression`
 3. `base_expression` 再不合适时，继续走现有 fallback（含 provider / neutral）
 

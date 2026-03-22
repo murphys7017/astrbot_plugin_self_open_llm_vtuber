@@ -7,7 +7,7 @@ from typing import Any
 from astrbot.api import logger
 from astrbot.api.provider import Provider, STTProvider
 
-from .model_info import parse_model_info
+from .model_info import DEFAULT_LIVE2D_MODEL_NAME, parse_model_info
 from .payload_builder import build_set_model_and_conf
 
 
@@ -36,7 +36,7 @@ class RuntimeState:
         self.expression_provider_id = ""
         self.vad_model = "silero_vad"
         self.vad_config: dict[str, Any] = {}
-        self.live2d_model_name = ""
+        self.live2d_model_name = DEFAULT_LIVE2D_MODEL_NAME
         self.model_info: dict[str, Any] = {}
         self.image_cooldown_seconds = 60
         self.default_persona: dict[str, Any] | None = None
@@ -121,7 +121,11 @@ class RuntimeState:
             int(_plugin_config_get(self.plugin_config, "image_cooldown_seconds", 60)),
             0,
         )
-        self.live2d_model_name = _plugin_config_get(self.plugin_config, "live2d_model_name", "")
+        self.live2d_model_name = _plugin_config_get(
+            self.plugin_config,
+            "live2d_model_name",
+            DEFAULT_LIVE2D_MODEL_NAME,
+        )
         self.model_info = parse_model_info(
             self._config_get(self.platform_config, "model_info_json", "{}"),
             host=self.host,

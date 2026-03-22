@@ -6,6 +6,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.provider import LLMResponse, ProviderRequest
 from astrbot.api.star import Context, Star
 
+from .adapter.model_info import DEFAULT_LIVE2D_MODEL_NAME
 from .adapter.inline_expression import (
     LIVE2D_BASE_EXPRESSION_EXTRA_KEY,
     LIVE2D_MOTION_ID_EXTRA_KEY,
@@ -44,7 +45,7 @@ class MyPlugin(Star):
         selected_model_name = _plugin_config_value(
             plugin_config,
             "live2d_model_name",
-            "",
+            DEFAULT_LIVE2D_MODEL_NAME,
         )
 
         live2ds_dir = Path(__file__).resolve().parent / "live2ds"
@@ -115,7 +116,7 @@ class MyPlugin(Star):
         selected_model_name = _plugin_config_value(
             plugin_config,
             "live2d_model_name",
-            "",
+            DEFAULT_LIVE2D_MODEL_NAME,
         )
 
         live2ds_dir = Path(__file__).resolve().parent / "live2ds"
