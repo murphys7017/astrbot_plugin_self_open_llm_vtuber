@@ -125,7 +125,12 @@ class MediaService:
                 return Image.fromURL(url=data)
         return None
 
-    def save_audio_buffer_to_temp_wav(self, audio_buffer: np.ndarray) -> str:
+    def save_audio_buffer_to_temp_wav(
+        self,
+        audio_buffer: np.ndarray,
+        *,
+        sample_rate: int = 16000,
+    ) -> str:
         import wave
 
         temp_dir = get_astrbot_temp_path()
@@ -139,7 +144,7 @@ class MediaService:
         with wave.open(temp_path, "wb") as wf:
             wf.setnchannels(1)
             wf.setsampwidth(2)
-            wf.setframerate(16000)
+            wf.setframerate(max(int(sample_rate), 1))
             wf.writeframes(pcm.tobytes())
 
         return temp_path

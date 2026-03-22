@@ -37,6 +37,11 @@
     "default": "",
     "_special": "select_provider"
   },
+  "motion_candidate_limit": {
+    "description": "注入给主模型的 motion_id 候选上限。0 表示不限制。",
+    "type": "int",
+    "default": 8
+  },
   "vad_model": {
     "description": "前端原始音频断句使用的 VAD 模型。当前使用独立的 silero-vad Python 包，不再依赖 OLV 源码。",
     "type": "string",

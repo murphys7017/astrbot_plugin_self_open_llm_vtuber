@@ -11,7 +11,7 @@ from astrbot.core.platform.message_type import MessageType
 from astrbot.core.utils.active_event_registry import active_event_registry
 
 from .expression_action_builder import build_expression_actions
-from .inline_expression import normalize_base_expression_key
+from .inline_expression import normalize_base_expression_key, normalize_motion_id
 from .payload_builder import (
     build_audio_payload,
     build_backend_synth_complete,
@@ -95,6 +95,24 @@ class TurnCoordinator:
             await self._handle_interrupt_signal()
             return
 
+        if msg_type == "audio-stream-start":
+            await self.speech_ingress.handle_audio_stream_start(message)
+            return
+
+        if msg_type == "audio-stream-chunk":
+            await self.speech_ingress.handle_audio_stream_chunk(message)
+            return
+
+        if msg_type == "audio-stream-end":
+            message_obj = await self.speech_ingress.handle_audio_stream_end(message)
+            if message_obj is not None:
+                await self._commit_inbound_message(message_obj)
+            return
+
+        if msg_type == "audio-stream-interrupt":
+            await self.speech_ingress.handle_audio_stream_interrupt(message.get("stream_id"))
+            return
+
         if msg_type == "mic-audio-data":
             await self._handle_audio_data(message)
             return
@@ -120,6 +138,7 @@ class TurnCoordinator:
         message_chain,
         unified_msg_origin: str | None = None,
         inline_base_expression: str | None = None,
+        inline_motion_id: str | None = None,
     ) -> None:
         del unified_msg_origin
 
@@ -152,6 +171,7 @@ class TurnCoordinator:
                     reply_text=reply_text,
                     has_audio_reply=has_audio_reply,
                     inline_base_expression=inline_base_expression,
+                    inline_motion_id=inline_motion_id,
                 )
                 if expr_actions:
                     actions.update(expr_actions)
@@ -296,6 +316,7 @@ class TurnCoordinator:
             stopped_count = active_event_registry.request_agent_stop_all(umo)
             stopped_count = max(stopped_count, active_event_registry.stop_all(umo))
 
+        await self.speech_ingress.handle_audio_stream_interrupt()
         self.session_state.reset_to_idle()
         await self.media_service.clear_audio_buffer()
 
@@ -347,20 +368,26 @@ class TurnCoordinator:
         reply_text: str,
         has_audio_reply: bool,
         inline_base_expression: str | None = None,
+        inline_motion_id: str | None = None,
     ) -> dict[str, Any] | None:
         cache_key = (reply_text or "").strip()
         if not cache_key:
             return None
 
         normalized_inline_expression = normalize_base_expression_key(inline_base_expression)
+        normalized_inline_motion = normalize_motion_id(inline_motion_id)
         cached_reply_text = self._turn_expression_cache.get("reply_text")
         cached_actions = self._turn_expression_cache.get("actions")
         cached_inline_expression = normalize_base_expression_key(
             self._turn_expression_cache.get("inline_base_expression")
         )
+        cached_inline_motion = normalize_motion_id(
+            self._turn_expression_cache.get("inline_motion_id")
+        )
         if (
             cached_reply_text == cache_key
             and cached_inline_expression == normalized_inline_expression
+            and cached_inline_motion == normalized_inline_motion
             and isinstance(cached_actions, dict)
         ):
             logger.debug(
@@ -373,6 +400,7 @@ class TurnCoordinator:
         actions = await self._build_expression_actions(
             cache_key,
             inline_base_expression=inline_base_expression,
+            inline_motion_id=inline_motion_id,
         )
         if isinstance(actions, dict):
             self._turn_expression_cache = {
@@ -381,6 +409,7 @@ class TurnCoordinator:
                 "has_audio_reply": has_audio_reply,
                 "audio_sent": False,
                 "inline_base_expression": normalized_inline_expression,
+                "inline_motion_id": normalized_inline_motion,
             }
         return actions
 
@@ -410,6 +439,7 @@ class TurnCoordinator:
         self,
         reply_text: str,
         inline_base_expression: str | None = None,
+        inline_motion_id: str | None = None,
     ) -> dict[str, Any] | None:
         return await build_expression_actions(
             runtime_state=self.runtime_state,
@@ -417,6 +447,7 @@ class TurnCoordinator:
             last_user_text=self.session_state.last_user_text,
             reply_text=reply_text,
             inline_base_expression=inline_base_expression,
+            inline_motion_id=inline_motion_id,
         )
 
 def _iter_message_chain(message_chain) -> list[Any]:

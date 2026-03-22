@@ -128,6 +128,14 @@ npm run dev:web
 - 建议使用指令跟随较稳定的模型
 - 例如：`volcengine_ark/GLM-4.7`
 
+### `motion_candidate_limit`
+
+- 注入给主模型的 `motion_id` 候选上限
+- 默认值：`8`
+- 设为 `0` 表示不限制（会给出模型全部 `motionMap` 键）
+- 若存在 `live2ds/<model_name>/motion_catalog.json`，会自动注入其中的动作语义描述
+- 且可直接选择 `motion_catalog` 内的 `id`（如 `smirk_tilt`），后端会按 catalog 的 `file` 播放动作
+
 ### `vad_model` 及相关参数
 
 - 用于前端发送 `raw-audio-data` 时的后端断句
@@ -232,6 +240,22 @@ npm run dev
 规划结果会通过 `actions.expressions` 和 `actions.expression_decision` 发送给前端。
 
 即使这次回复没有音频，插件也会发送带动作的消息，让前端依然可以播放表情。
+
+同时插件会在主模型请求中注入动作标签约束，优先让主模型输出：
+
+```text
+<@anim {"motion_id":"thinking","base_expression":"confused"}>
+```
+
+运行时选择链路为：
+
+1. 优先使用 `motion_id`（仅当命中当前模型 `motionMap` 且可解析资源）
+2. `motion_id` 无效时，退回 `base_expression`
+3. `base_expression` 再不合适时，继续走现有 fallback（含 provider / neutral）
+
+兼容说明：
+
+- 旧标签 `<~base_expression~>` 仍可继续使用
 
 ### 模型切换
 

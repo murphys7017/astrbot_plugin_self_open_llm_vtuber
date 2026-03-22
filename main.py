@@ -8,9 +8,13 @@ from astrbot.api.star import Context, Star
 
 from .adapter.inline_expression import (
     LIVE2D_BASE_EXPRESSION_EXTRA_KEY,
-    build_base_expression_hook_prompt,
+    LIVE2D_MOTION_ID_EXTRA_KEY,
+    build_inline_anim_hook_prompt,
     collect_available_base_expressions,
-    extract_inline_base_expression,
+    collect_available_motion_ids,
+    collect_motion_catalog_descriptions,
+    extract_inline_anim_decision,
+    select_motion_candidates,
 )
 
 
@@ -36,20 +40,46 @@ class MyPlugin(Star):
         if event.get_platform_id() != "olv_pet_adapter":
             return
 
-        plugin_config = self.config if self.config is not None else {}
-        selected_model_name = ""
-        if hasattr(plugin_config, "get"):
-            selected_model_name = str(plugin_config.get("live2d_model_name", "") or "")
+        plugin_config = _load_latest_plugin_config(self.config)
+        selected_model_name = _plugin_config_value(
+            plugin_config,
+            "live2d_model_name",
+            "",
+        )
 
         live2ds_dir = Path(__file__).resolve().parent / "live2ds"
         base_expressions = collect_available_base_expressions(
             live2ds_dir=live2ds_dir,
             selected_model_name=selected_model_name,
         )
-        if not base_expressions:
+        motion_ids = collect_available_motion_ids(
+            live2ds_dir=live2ds_dir,
+            selected_model_name=selected_model_name,
+        )
+        if not base_expressions and not motion_ids:
             return
 
-        hook_prompt = build_base_expression_hook_prompt(base_expressions)
+        motion_candidate_limit = 8
+        try:
+            motion_candidate_limit = int(
+                _plugin_config_value(plugin_config, "motion_candidate_limit", 8) or 8
+            )
+        except Exception:
+            motion_candidate_limit = 8
+        motion_candidates = select_motion_candidates(
+            motion_ids,
+            max_candidates=max(motion_candidate_limit, 0),
+        )
+        motion_descriptions = collect_motion_catalog_descriptions(
+            live2ds_dir=live2ds_dir,
+            selected_model_name=selected_model_name,
+        )
+
+        hook_prompt = build_inline_anim_hook_prompt(
+            motion_candidates=motion_candidates,
+            base_expressions=base_expressions,
+            motion_descriptions=motion_descriptions,
+        )
         if not hook_prompt:
             return
 
@@ -58,9 +88,16 @@ class MyPlugin(Star):
         else:
             req.system_prompt = hook_prompt.lstrip()
         logger.debug(
-            "[Live2DExpr] hook request injected model=%s func_tool=%s",
+            "[Live2DExpr] hook request injected model=%s func_tool=%s "
+            "motion_candidates=%s candidate_preview=%s catalog_descriptions=%s catalog_preview=%s",
             selected_model_name or "<default>",
             req.func_tool is not None,
+            len(motion_candidates),
+            ", ".join(motion_candidates[:8]) if motion_candidates else "<none>",
+            len(motion_descriptions),
+            ", ".join(list(motion_descriptions.keys())[:8])
+            if motion_descriptions
+            else "<none>",
         )
 
     @filter.on_llm_response()
@@ -74,32 +111,47 @@ class MyPlugin(Star):
         if resp.is_chunk:
             return
 
-        plugin_config = self.config if self.config is not None else {}
-        selected_model_name = ""
-        if hasattr(plugin_config, "get"):
-            selected_model_name = str(plugin_config.get("live2d_model_name", "") or "")
+        plugin_config = _load_latest_plugin_config(self.config)
+        selected_model_name = _plugin_config_value(
+            plugin_config,
+            "live2d_model_name",
+            "",
+        )
 
         live2ds_dir = Path(__file__).resolve().parent / "live2ds"
         base_expressions = collect_available_base_expressions(
             live2ds_dir=live2ds_dir,
             selected_model_name=selected_model_name,
         )
-        if not base_expressions:
+        motion_ids = collect_available_motion_ids(
+            live2ds_dir=live2ds_dir,
+            selected_model_name=selected_model_name,
+        )
+        if not base_expressions and not motion_ids:
             return
 
-        extracted_expression, cleaned_text = extract_inline_base_expression(
+        decision, cleaned_text = extract_inline_anim_decision(
             resp.completion_text or "",
+            allowed_motion_ids=motion_ids,
             allowed_base_expressions=base_expressions,
         )
-        if not extracted_expression:
-            logger.debug("[Live2DExpr] hook response extracted nothing")
+        if not decision:
+            logger.debug("[Live2DExpr] hook response extracted nothing (anim/base)")
             return
 
+        extracted_motion_id = decision.get("motion_id")
+        extracted_expression = decision.get("base_expression")
+        if extracted_motion_id:
+            event.set_extra(LIVE2D_MOTION_ID_EXTRA_KEY, extracted_motion_id)
+        if extracted_expression:
+            event.set_extra(LIVE2D_BASE_EXPRESSION_EXTRA_KEY, extracted_expression)
+
         logger.info(
-            "[Live2DExpr] hook response extracted base_expression=%s",
-            extracted_expression,
+            "[Live2DExpr] hook response extracted model=%s motion_id=%s base_expression=%s",
+            selected_model_name or "<default>",
+            extracted_motion_id or "<none>",
+            extracted_expression or "<none>",
         )
-        event.set_extra(LIVE2D_BASE_EXPRESSION_EXTRA_KEY, extracted_expression)
         resp.completion_text = cleaned_text
 
 
@@ -110,3 +162,21 @@ def _configure_noisy_loggers() -> None:
         "pyffmpeg.misc.Paths",
     ):
         logging.getLogger(logger_name).setLevel(logging.CRITICAL)
+
+
+def _load_latest_plugin_config(fallback_config: dict | None = None):
+    from .adapter.plugin_runtime import get_plugin_config
+
+    latest = get_plugin_config()
+    if latest is not None:
+        return latest
+    return fallback_config if fallback_config is not None else {}
+
+
+def _plugin_config_value(config: dict | None, key: str, default):
+    if config is None:
+        return default
+    if hasattr(config, "get"):
+        value = config.get(key, default)
+        return default if value is None else value
+    return default

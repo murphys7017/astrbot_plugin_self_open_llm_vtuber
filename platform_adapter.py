@@ -235,11 +235,13 @@ class OLVPetPlatformAdapter(Platform):
         message_chain,
         unified_msg_origin: str | None = None,
         inline_base_expression: str | None = None,
+        inline_motion_id: str | None = None,
     ) -> None:
         await self.turn_coordinator.emit_message_chain(
             message_chain=message_chain,
             unified_msg_origin=unified_msg_origin,
             inline_base_expression=inline_base_expression,
+            inline_motion_id=inline_motion_id,
         )
 
     def _refresh_runtime_settings(self) -> None:
@@ -291,6 +293,7 @@ class OLVPetPlatformAdapter(Platform):
 
     async def _handle_transport_disconnect(self) -> None:
         self.session_state.reset_to_idle()
+        await self.turn_coordinator.speech_ingress.handle_audio_stream_interrupt()
         await self.media_service.clear_audio_buffer()
 
 def _config_get(config: Any, key: str, default: Any) -> Any:

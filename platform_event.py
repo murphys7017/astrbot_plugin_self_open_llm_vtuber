@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from astrbot.api.event import AstrMessageEvent
 
-from .adapter.inline_expression import LIVE2D_BASE_EXPRESSION_EXTRA_KEY
+from .adapter.inline_expression import (
+    LIVE2D_BASE_EXPRESSION_EXTRA_KEY,
+    LIVE2D_MOTION_ID_EXTRA_KEY,
+)
 
 
 class OLVPetPlatformEvent(AstrMessageEvent):
@@ -19,5 +22,6 @@ class OLVPetPlatformEvent(AstrMessageEvent):
             message_chain=message,
             unified_msg_origin=self.unified_msg_origin,
             inline_base_expression=self.get_extra(LIVE2D_BASE_EXPRESSION_EXTRA_KEY),
+            inline_motion_id=self.get_extra(LIVE2D_MOTION_ID_EXTRA_KEY),
         )
         await super().send(message)
