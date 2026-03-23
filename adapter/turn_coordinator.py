@@ -11,7 +11,11 @@ from astrbot.core.platform.message_type import MessageType
 from astrbot.core.utils.active_event_registry import active_event_registry
 
 from .expression_action_builder import build_expression_actions
-from .inline_expression import normalize_base_expression_key, normalize_motion_id
+from .inline_expression import (
+    normalize_base_expression_key,
+    normalize_motion_id,
+    strip_inline_expression_markup,
+)
 from .payload_builder import (
     build_audio_payload,
     build_backend_synth_complete,
@@ -146,7 +150,7 @@ class TurnCoordinator:
         self._mark_turn_timing("emit_started_at", emit_started_at)
         texts, picture_paths, record_paths = _extract_outbound_message_parts(message_chain)
 
-        reply_text = "\n".join(texts).strip()
+        reply_text = strip_inline_expression_markup("\n".join(texts).strip())
         has_audio_reply = bool(record_paths)
         if self._should_skip_duplicate_plain_emit(
             reply_text=reply_text,

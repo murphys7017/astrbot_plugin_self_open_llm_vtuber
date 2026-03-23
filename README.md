@@ -106,3 +106,10 @@ npm run dev
 - 协议基线（字段级）：[docs/protocol_baseline.md](docs/protocol_baseline.md)
 - 排障手册：[docs/troubleshooting.md](docs/troubleshooting.md)
 - 联调审阅记录：[docs/审阅结果.md](docs/审阅结果.md)
+
+## 项目来源
+
+本插件的桌宠交互能力与整体方案基于 **Open-LLM-VTuber** 项目进行 AstrBot 场景适配与扩展：
+
+- Open-LLM-VTuber（原项目）：https://github.com/Open-LLM-VTuber/Open-LLM-VTuber
+- 本插件配套前端：https://github.com/murphys7017/astrbot_plugin_self_open_llm_vtuber_web

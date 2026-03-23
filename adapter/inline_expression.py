@@ -339,7 +339,9 @@ def build_inline_anim_hook_prompt(
     prompt += (
         "如果你不确定 motion_id，可输出空字符串 \"\"，但 base_expression 必须尽量给出。\n"
         '输出示例：<@anim {"motion_id":"thinking","base_expression":"confused"}>\n'
-        "紧接着正常输出正文内容，不要解释这个标签，不要输出多个标签。"
+        "紧接着正常输出正文内容。\n"
+        "整个回复中只允许出现一次动作决策标签。\n"
+        "正文后续绝对不要再次输出任何 <@anim ...>、<@motion ...> 或类似标签。"
     )
     return prompt
 
@@ -351,13 +353,13 @@ def extract_inline_anim_decision(
     allowed_base_expressions: list[str] | None = None,
 ) -> tuple[dict[str, str] | None, str]:
     raw_text = text or ""
-    parsed_payload, cleaned_text = _extract_inline_anim_payload(raw_text)
+    parsed_payloads, cleaned_text = _extract_all_inline_anim_payloads(raw_text)
     anim_tag_consumed = cleaned_text != raw_text
 
     allowed_motion = _normalized_set(allowed_motion_ids)
     allowed_base = _normalized_set(allowed_base_expressions)
 
-    if parsed_payload is not None:
+    for parsed_payload in parsed_payloads:
         motion_id = normalize_motion_id(parsed_payload.get("motion_id"))
         base_expression = normalize_base_expression_key(
             parsed_payload.get("base_expression")
@@ -375,8 +377,6 @@ def extract_inline_anim_decision(
             result["base_expression"] = base_expression
         if result:
             return result, cleaned_text
-
-        return None, cleaned_text
 
     base_source = cleaned_text if anim_tag_consumed else raw_text
     base_expression, cleaned_by_base = extract_inline_base_expression(
@@ -469,6 +469,101 @@ def _extract_inline_anim_payload(text: str) -> tuple[dict[str, Any] | None, str]
     if isinstance(payload, dict):
         return payload, cleaned
     return None, cleaned
+
+
+def strip_inline_expression_markup(text: str) -> str:
+    cleaned = _strip_all_inline_anim_tags(text or "")
+    base_expression, cleaned = extract_inline_base_expression(cleaned)
+    del base_expression
+    return _normalize_inline_markup_whitespace(cleaned)
+
+
+def _extract_all_inline_anim_payloads(text: str) -> tuple[list[dict[str, Any]], str]:
+    raw_text = text or ""
+    payloads: list[dict[str, Any]] = []
+    cleaned_parts: list[str] = []
+    cursor = 0
+    lowered = raw_text.lower()
+
+    while cursor < len(raw_text):
+        next_positions = [
+            lowered.find(prefix, cursor)
+            for prefix in _ANIM_TAG_PREFIXES
+            if lowered.find(prefix, cursor) >= 0
+        ]
+        if not next_positions:
+            cleaned_parts.append(raw_text[cursor:])
+            break
+
+        tag_start = min(next_positions)
+        cleaned_parts.append(raw_text[cursor:tag_start])
+        payload, tag_end = _parse_inline_anim_tag(raw_text, tag_start)
+        if tag_end < 0:
+            cleaned_parts.append(raw_text[tag_start])
+            cursor = tag_start + 1
+            continue
+
+        if isinstance(payload, dict):
+            payloads.append(payload)
+        cursor = tag_end
+
+    cleaned = _normalize_inline_markup_whitespace("".join(cleaned_parts))
+    return payloads, cleaned
+
+
+def _strip_all_inline_anim_tags(text: str) -> str:
+    return _extract_all_inline_anim_payloads(text)[1]
+
+
+def _parse_inline_anim_tag(text: str, start_index: int) -> tuple[dict[str, Any] | None, int]:
+    raw_text = text or ""
+    if start_index < 0 or start_index >= len(raw_text):
+        return None, -1
+
+    lowered = raw_text.lower()
+    matched_prefix = None
+    for prefix in _ANIM_TAG_PREFIXES:
+        if lowered.startswith(prefix, start_index):
+            matched_prefix = prefix
+            break
+    if matched_prefix is None:
+        return None, -1
+
+    idx = start_index + len(matched_prefix)
+    while idx < len(raw_text) and raw_text[idx].isspace():
+        idx += 1
+
+    if idx >= len(raw_text) or raw_text[idx] != "{":
+        return None, -1
+
+    payload_end = _find_json_object_end(raw_text, idx)
+    if payload_end < 0:
+        return None, -1
+
+    payload_str = raw_text[idx : payload_end + 1]
+    tail_idx = payload_end + 1
+    while tail_idx < len(raw_text) and raw_text[tail_idx].isspace():
+        tail_idx += 1
+
+    if tail_idx >= len(raw_text) or raw_text[tail_idx] != ">":
+        return None, -1
+
+    try:
+        payload = json.loads(payload_str)
+    except Exception:
+        payload = None
+
+    end_index = tail_idx + 1
+    while end_index < len(raw_text) and raw_text[end_index].isspace():
+        end_index += 1
+
+    return payload if isinstance(payload, dict) else None, end_index
+
+
+def _normalize_inline_markup_whitespace(text: str) -> str:
+    cleaned = text.replace("\r\n", "\n")
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
 
 
 def _find_json_object_end(text: str, start_index: int) -> int:
