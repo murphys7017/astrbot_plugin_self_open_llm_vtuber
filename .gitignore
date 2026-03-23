@@ -26,7 +26,6 @@ __pycache__/
 *.pyc
 lab.py
 .idea
-live2ds/Mk6_1.0
 live2ds/shizuku
 # Virtual environment
 .venv
