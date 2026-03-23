@@ -1,6 +1,6 @@
 name: astrbot_plugin_self_open_llm_vtuber
-display_name: Desktop VTuber Adapter
-description: AstrBot platform adapter for the desktop VTuber frontend.
-version: 0.1.0
+display_name: Alice的桌面分身
+description: 让你的bot在桌面或者web可以看到你、看到你在干什么、开口说话并实时做表情动作，支持语音输入、语音打断与互动联动。
+version: 0.9.8
 author: YakumoAki
 repo: https://github.com/murphys7017/astrbot_plugin_self_open_llm_vtuber
