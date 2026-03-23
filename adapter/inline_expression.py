@@ -341,7 +341,9 @@ def build_inline_anim_hook_prompt(
         '输出示例：<@anim {"motion_id":"thinking","base_expression":"confused"}>\n'
         "紧接着正常输出正文内容。\n"
         "整个回复中只允许出现一次动作决策标签。\n"
-        "正文后续绝对不要再次输出任何 <@anim ...>、<@motion ...> 或类似标签。"
+        "正文后续绝对不要再次输出任何 <@anim ...>、<@motion ...> 或类似标签。\n"
+        "正文只能保留一段自然回复，不要再追加第二段补充、吐槽或总结。\n"
+        "如果用户当前输入不是空消息，绝对不要臆测用户发送了空消息，也不要提及空消息、手滑、重复发送等内容。"
     )
     return prompt
 
@@ -472,7 +474,7 @@ def _extract_inline_anim_payload(text: str) -> tuple[dict[str, Any] | None, str]
 
 
 def strip_inline_expression_markup(text: str) -> str:
-    cleaned = _strip_all_inline_anim_tags(text or "")
+    cleaned = _extract_all_inline_anim_payloads(text or "")[1]
     base_expression, cleaned = extract_inline_base_expression(cleaned)
     del base_expression
     return _normalize_inline_markup_whitespace(cleaned)
@@ -481,9 +483,10 @@ def strip_inline_expression_markup(text: str) -> str:
 def _extract_all_inline_anim_payloads(text: str) -> tuple[list[dict[str, Any]], str]:
     raw_text = text or ""
     payloads: list[dict[str, Any]] = []
-    cleaned_parts: list[str] = []
+    text_segments: list[str] = []
     cursor = 0
     lowered = raw_text.lower()
+    found_any_tag = False
 
     while cursor < len(raw_text):
         next_positions = [
@@ -492,27 +495,36 @@ def _extract_all_inline_anim_payloads(text: str) -> tuple[list[dict[str, Any]], 
             if lowered.find(prefix, cursor) >= 0
         ]
         if not next_positions:
-            cleaned_parts.append(raw_text[cursor:])
+            if not found_any_tag:
+                text_segments.append(raw_text[cursor:])
+            elif payloads:
+                text_segments.append(raw_text[cursor:])
             break
 
         tag_start = min(next_positions)
-        cleaned_parts.append(raw_text[cursor:tag_start])
+        if found_any_tag and payloads:
+            text_segments.append(raw_text[cursor:tag_start])
+            break
+
+        if not found_any_tag:
+            leading_text = raw_text[cursor:tag_start]
+            if leading_text.strip():
+                text_segments.append(leading_text)
+
         payload, tag_end = _parse_inline_anim_tag(raw_text, tag_start)
         if tag_end < 0:
-            cleaned_parts.append(raw_text[tag_start])
+            if not found_any_tag:
+                text_segments.append(raw_text[tag_start])
             cursor = tag_start + 1
             continue
 
+        found_any_tag = True
         if isinstance(payload, dict):
             payloads.append(payload)
         cursor = tag_end
 
-    cleaned = _normalize_inline_markup_whitespace("".join(cleaned_parts))
+    cleaned = _normalize_inline_markup_whitespace("".join(text_segments))
     return payloads, cleaned
-
-
-def _strip_all_inline_anim_tags(text: str) -> str:
-    return _extract_all_inline_anim_payloads(text)[1]
 
 
 def _parse_inline_anim_tag(text: str, start_index: int) -> tuple[dict[str, Any] | None, int]:
