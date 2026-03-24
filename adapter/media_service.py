@@ -101,29 +101,36 @@ class MediaService:
         return str(cached_path), audio_url
 
     def convert_image_component(self, image_payload):
+        image_component, _ = self.convert_image_component_with_diagnostic(image_payload)
+        return image_component
+
+    def convert_image_component_with_diagnostic(self, image_payload):
         if isinstance(image_payload, str) and image_payload:
-            local_path = self._save_frontend_image_payload_to_local_path(image_payload)
+            local_path, diagnostic = self._save_frontend_image_payload_to_local_path(
+                image_payload
+            )
             if local_path:
-                return Image.fromFileSystem(path=local_path)
+                return Image.fromFileSystem(path=local_path), None
             if image_payload.startswith("http://") or image_payload.startswith("https://"):
-                return Image.fromURL(url=image_payload)
-            return None
+                return Image.fromURL(url=image_payload), None
+            return None, diagnostic or _build_image_diagnostic("unsupported_image_payload")
 
         if not isinstance(image_payload, dict):
-            return None
+            return None, _build_image_diagnostic("unsupported_image_payload")
 
         data = image_payload.get("data")
         mime_type = image_payload.get("mime_type", "image/png")
         if isinstance(data, str) and data:
-            local_path = self._save_frontend_image_payload_to_local_path(
+            local_path, diagnostic = self._save_frontend_image_payload_to_local_path(
                 data,
                 mime_type=mime_type,
             )
             if local_path:
-                return Image.fromFileSystem(path=local_path)
+                return Image.fromFileSystem(path=local_path), None
             if data.startswith("http://") or data.startswith("https://"):
-                return Image.fromURL(url=data)
-        return None
+                return Image.fromURL(url=data), None
+            return None, diagnostic or _build_image_diagnostic("unsupported_image_payload")
+        return None, _build_image_diagnostic("unsupported_image_payload")
 
     def save_audio_buffer_to_temp_wav(
         self,
@@ -202,10 +209,10 @@ class MediaService:
         image_payload: str,
         *,
         mime_type: str | None = None,
-    ) -> str | None:
+    ) -> tuple[str | None, dict[str, str] | None]:
         payload = (image_payload or "").strip()
         if not payload:
-            return None
+            return None, _build_image_diagnostic("empty_image_payload")
 
         if payload.startswith("file:///"):
             source_path = Path(unquote(payload.replace("file:///", "", 1)))
@@ -215,7 +222,7 @@ class MediaService:
             return self._copy_allowed_frontend_image_to_cache(Path(payload), mime_type)
 
         if payload.startswith("http://") or payload.startswith("https://"):
-            return None
+            return None, None
 
         image_bytes: bytes | None = None
         resolved_mime_type = mime_type or "image/png"
@@ -228,13 +235,13 @@ class MediaService:
             )
             if not data_match:
                 logger.warning("Unsupported frontend image data URI, skip saving image.")
-                return None
+                return None, _build_image_diagnostic("unsupported_data_uri")
             resolved_mime_type = data_match.group("mime") or resolved_mime_type
             try:
                 image_bytes = base64.b64decode(data_match.group("data"))
             except Exception as exc:
                 logger.warning("Failed to decode frontend image data URI: %s", exc)
-                return None
+                return None, _build_image_diagnostic("invalid_base64_payload")
         else:
             compact_payload = payload
             if compact_payload.startswith("base64://"):
@@ -242,7 +249,7 @@ class MediaService:
             try:
                 image_bytes = base64.b64decode(compact_payload)
             except Exception:
-                return None
+                return None, _build_image_diagnostic("invalid_base64_payload")
 
         return self._write_frontend_image_bytes(image_bytes, resolved_mime_type)
 
@@ -250,16 +257,16 @@ class MediaService:
         self,
         image_bytes: bytes | None,
         mime_type: str,
-    ) -> str | None:
+    ) -> tuple[str | None, dict[str, str] | None]:
         if not image_bytes:
-            return None
+            return None, _build_image_diagnostic("empty_image_payload")
 
         if len(image_bytes) > FRONTEND_IMAGE_MAX_BYTES:
             logger.warning(
                 "Rejected frontend image larger than %s bytes.",
                 FRONTEND_IMAGE_MAX_BYTES,
             )
-            return None
+            return None, _build_image_diagnostic("image_too_large")
 
         self.image_cache_dir.mkdir(parents=True, exist_ok=True)
         suffix = mimetypes.guess_extension(mime_type or "") or ".png"
@@ -269,43 +276,43 @@ class MediaService:
         image_path = self.image_cache_dir / f"frontend_{uuid4().hex}{suffix}"
         image_path.write_bytes(image_bytes)
         logger.debug("Saved frontend image to local file: %s", image_path)
-        return str(image_path.resolve())
+        return str(image_path.resolve()), None
 
     def _copy_allowed_frontend_image_to_cache(
         self,
         source_path: Path,
         mime_type: str | None = None,
-    ) -> str | None:
+    ) -> tuple[str | None, dict[str, str] | None]:
         try:
             resolved_path = source_path.expanduser().resolve(strict=True)
         except OSError:
-            return None
+            return None, _build_image_diagnostic("invalid_local_path")
 
         if not resolved_path.is_file():
-            return None
+            return None, _build_image_diagnostic("invalid_local_path")
 
         if not self._is_allowed_frontend_image_path(resolved_path):
             logger.warning(
                 "Rejected frontend local image path outside allowed roots: %s",
                 resolved_path,
             )
-            return None
+            return None, _build_image_diagnostic("local_path_outside_allowed_roots")
 
         if resolved_path.suffix.lower() not in FRONTEND_IMAGE_ALLOWED_SUFFIXES:
             logger.warning(
                 "Rejected frontend local image path with unsupported suffix: %s",
                 resolved_path,
             )
-            return None
+            return None, _build_image_diagnostic("unsupported_local_suffix")
 
         try:
             image_bytes = resolved_path.read_bytes()
         except OSError as exc:
             logger.warning("Failed to read frontend local image `%s`: %s", resolved_path, exc)
-            return None
+            return None, _build_image_diagnostic("local_read_failed")
 
         if not image_bytes:
-            return None
+            return None, _build_image_diagnostic("empty_image_payload")
 
         if len(image_bytes) > FRONTEND_IMAGE_MAX_BYTES:
             logger.warning(
@@ -313,7 +320,7 @@ class MediaService:
                 FRONTEND_IMAGE_MAX_BYTES,
                 resolved_path,
             )
-            return None
+            return None, _build_image_diagnostic("image_too_large")
 
         resolved_mime_type = (
             mime_type or mimetypes.guess_type(str(resolved_path))[0] or "image/png"
@@ -338,3 +345,7 @@ class MediaService:
             (self.olv_dir / "backgrounds").resolve(),
             temp_root,
         )
+
+
+def _build_image_diagnostic(reason: str) -> dict[str, str]:
+    return {"reason": reason}

@@ -273,6 +273,7 @@ class TurnCoordinator:
             self._turn_expression_cache = {}
             self.chat_buffer.add("user", message_obj.message_str)
             await self._send_json(build_control("conversation-chain-start"))
+            await self._emit_image_input_diagnostics(message_obj)
 
             event = self._build_platform_event(message_obj)
             self._commit_event(event)
@@ -282,6 +283,52 @@ class TurnCoordinator:
                 self._current_turn_index(),
                 len(message_obj.message_str or ""),
             )
+
+    async def _emit_image_input_diagnostics(self, message_obj) -> None:
+        raw_message = getattr(message_obj, "raw_message", None)
+        if not isinstance(raw_message, dict):
+            return
+
+        diagnostics = raw_message.get("image_input_diagnostics")
+        if not isinstance(diagnostics, list) or not diagnostics:
+            return
+
+        actionable_reasons = [
+            str(item.get("reason") or "").strip()
+            for item in diagnostics
+            if isinstance(item, dict)
+            and str(item.get("reason") or "").strip()
+            and str(item.get("reason") or "").strip() != "cooldown_window"
+        ]
+        if not actionable_reasons:
+            return
+
+        counts: dict[str, int] = {}
+        for reason in actionable_reasons:
+            counts[reason] = counts.get(reason, 0) + 1
+
+        parts = [
+            f"{count} image(s) {self._describe_image_input_reason(reason)}"
+            for reason, count in counts.items()
+        ]
+        message = "Some images were ignored: " + "; ".join(parts) + "."
+        logger.warning("Image input diagnostics: %s", message)
+        await self._send_json(build_error(message))
+
+    @staticmethod
+    def _describe_image_input_reason(reason: str) -> str:
+        descriptions = {
+            "unsupported_image_payload": "used an unsupported payload format",
+            "unsupported_data_uri": "used an unsupported data URI format",
+            "invalid_base64_payload": "could not be decoded",
+            "invalid_local_path": "used an invalid local file path",
+            "local_path_outside_allowed_roots": "were outside the allowed local folders",
+            "unsupported_local_suffix": "used an unsupported local file suffix",
+            "local_read_failed": "could not be read from disk",
+            "image_too_large": "were too large",
+            "empty_image_payload": "were empty",
+        }
+        return descriptions.get(reason, "failed validation")
 
     async def _handle_audio_data(self, message: dict[str, Any]) -> None:
         await self.speech_ingress.handle_audio_data(message)
