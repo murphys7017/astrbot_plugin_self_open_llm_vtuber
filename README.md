@@ -2,6 +2,9 @@
 
 让你的bot在桌面或者web可以看到你、看到你在干什么、“开口说话、做表情、播动作”。这个插件负责把 AstrBot 的对话结果实时变成可视化桌宠互动，支持文本输入、语音输入和语音打断。
 
+- 前端安装包下载地址：[Release install-v1 · murphys7017/astrbot_plugin_vtb_adapter](https://github.com/murphys7017/astrbot_plugin_vtb_adapter/releases/tag/p1v0.9.8)
+  - 推荐从源码构建，我只打包了win安装包
+
 - 前端仓库：[murphys7017/astrbot_plugin_self_open_llm_vtuber_web](https://github.com/murphys7017/astrbot_plugin_self_open_llm_vtuber_web)
 - 插件仓库：[murphys7017/astrbot_plugin_self_open_llm_vtuber](https://github.com/murphys7017/astrbot_plugin_self_open_llm_vtuber)
 - 平台适配器 ID：`olv_pet_adapter`
@@ -58,13 +61,33 @@ pip install -r requirements.txt
 
 ## 快速使用
 
+
 ### 1. 启动前端
+#### 直接使用安装包
+
+由于本人只有win电脑，所以只打包了win版安装包，安装会直接安装到`%userprofile%\AppData\Local\Programs\open-llm-vtuber`，然后向开始菜单添加快捷链接。
+
+但是放心，可以卸载！
+
+#### 从源码编译
 
 在前端项目目录执行：
 
-```powershell
+~~~powershell
 npm install
-npm run dev
+~~~
+
+然后选择直接以开发模式启动或者构建安装包
+
+```powershell
+# 开发模式 桌面端
+npm run dev 
+# 开发模式 web
+npm run dev:web 
+# 构建安装包
+npm run build:win # npm run build:mac  npm run build:linux 
+# 构建web
+npm run build:web
 ```
 
 ### 2. 配置前端连接地址
