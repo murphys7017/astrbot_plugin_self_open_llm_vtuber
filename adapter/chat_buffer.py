@@ -22,3 +22,6 @@ class ChatBuffer:
 
     def to_list(self) -> list[dict[str, str]]:
         return [asdict(item) for item in self._items]
+
+    def clear(self) -> None:
+        self._items.clear()

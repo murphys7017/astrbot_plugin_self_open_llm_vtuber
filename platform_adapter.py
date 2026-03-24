@@ -12,11 +12,11 @@ from astrbot.core.utils.astrbot_path import (
 )
 import traceback
 from typing import Any
-from uuid import uuid4
 
 from .adapter.audio_runtime import create_vad_engine
 from .adapter.chat_buffer import ChatBuffer
 from .adapter.frontend_compat import FrontendCompatHandler
+from .adapter.history_bridge import ConversationHistoryBridge
 from .adapter.media_service import MediaService
 from .adapter.message_factory import MessageFactory
 from .adapter.model_info import build_static_routes, list_background_files
@@ -103,8 +103,18 @@ class OLVPetPlatformAdapter(Platform):
             media_service=self.media_service,
             image_cooldown_seconds_getter=lambda: self.runtime_state.image_cooldown_seconds,
         )
+        self.chat_buffer = ChatBuffer(
+            maxlen=int(_plugin_config_get(self.runtime_state.plugin_config, "chat_buffer_size", 10))
+        )
         self.frontend_compat_handler = FrontendCompatHandler(
-            background_files_getter=lambda: list_background_files(FRONTEND_ASSETS_DIR)
+            background_files_getter=lambda: list_background_files(FRONTEND_ASSETS_DIR),
+            history_bridge=ConversationHistoryBridge(
+                plugin_context=self._plugin_context,
+                platform_id="olv_pet_adapter",
+                client_uid=self.client_uid,
+                speaker_name=self.speaker_name,
+                chat_buffer=self.chat_buffer,
+            ),
         )
         self.transport = WebSocketTransport(
             host=self.host,
@@ -117,9 +127,6 @@ class OLVPetPlatformAdapter(Platform):
             on_disconnect=self._handle_transport_disconnect,
         )
         self._vad_engine = None
-        self.chat_buffer = ChatBuffer(
-            maxlen=int(_plugin_config_get(self.runtime_state.plugin_config, "chat_buffer_size", 10))
-        )
         self.turn_coordinator = TurnCoordinator(
             session_state=self.session_state,
             runtime_state=self.runtime_state,

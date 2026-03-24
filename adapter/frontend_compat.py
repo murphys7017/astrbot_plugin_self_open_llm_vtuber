@@ -23,8 +23,10 @@ class FrontendCompatHandler:
         self,
         *,
         background_files_getter: Callable[[], list[str]],
+        history_bridge,
     ) -> None:
         self._background_files_getter = background_files_getter
+        self._history_bridge = history_bridge
         self._history_uid = str(uuid4())
 
     @staticmethod
@@ -47,20 +49,28 @@ class FrontendCompatHandler:
         elif msg_type == "fetch-configs":
             await send_json({"type": "config-files", "configs": []})
         elif msg_type == "fetch-history-list":
-            await send_json({"type": "history-list", "histories": []})
+            histories = await self._history_bridge.list_histories()
+            await send_json({"type": "history-list", "histories": histories})
         elif msg_type == "create-new-history":
-            self._history_uid = str(uuid4())
+            history_uid = await self._history_bridge.create_history()
+            self._history_uid = history_uid or str(uuid4())
             await send_json(
                 {"type": "new-history-created", "history_uid": self._history_uid}
             )
         elif msg_type == "fetch-and-set-history":
-            await send_json({"type": "history-data", "messages": []})
+            history_uid = str(message.get("history_uid") or "").strip()
+            messages = await self._history_bridge.fetch_history(history_uid)
+            if history_uid:
+                self._history_uid = history_uid
+            await send_json({"type": "history-data", "messages": messages})
         elif msg_type == "delete-history":
+            history_uid = str(message.get("history_uid") or "").strip()
+            success = await self._history_bridge.delete_history(history_uid)
             await send_json(
                 {
                     "type": "history-deleted",
-                    "success": True,
-                    "history_uid": message.get("history_uid"),
+                    "success": success,
+                    "history_uid": history_uid,
                 }
             )
         elif msg_type == "switch-config":
