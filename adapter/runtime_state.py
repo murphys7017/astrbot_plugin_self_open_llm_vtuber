@@ -294,11 +294,21 @@ class RuntimeState:
         try:
             with open(config_path, encoding="utf-8-sig") as f:
                 data = json.load(f)
-        except Exception:
-            return RuntimeState._clone_plugin_config(config)
+        except Exception as exc:
+            logger.error("Failed to reload plugin config from `%s`: %s", config_path, exc)
+            raise RuntimeError(
+                f"Failed to reload plugin config from `{config_path}`: {exc}"
+            ) from exc
 
         if not isinstance(data, dict):
-            return RuntimeState._clone_plugin_config(config)
+            logger.error(
+                "Invalid plugin config in `%s`: expected a JSON object, got `%s`.",
+                config_path,
+                type(data).__name__,
+            )
+            raise RuntimeError(
+                f"Invalid plugin config in `{config_path}`: expected a JSON object."
+            )
         return data
 
 

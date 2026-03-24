@@ -37,10 +37,20 @@ def parse_model_info(
                     )
             return normalize_model_info(selected, base_url)
 
-        logger.warning(
-            "Live2D model `%s` not found in live2ds/model_dict.json, fallback to platform "
-            "`model_info_json` or first model.",
-            normalized_selected_model_name,
+        available_models = ", ".join(
+            _normalize_model_name(item.get("name"))
+            for item in model_dict_entries
+            if isinstance(item, dict) and _normalize_model_name(item.get("name"))
+        )
+        raise ValueError(
+            "Configured Live2D model "
+            f"`{normalized_selected_model_name}` was not found in "
+            f"`{live2ds_dir / 'model_dict.json'}`."
+            + (
+                f" Available models: {available_models}."
+                if available_models
+                else " No valid models were loaded from model_dict.json."
+            )
         )
 
     if isinstance(parsed_raw_model_info, dict):
@@ -69,14 +79,18 @@ def _load_model_dict_entries(live2ds_dir: Path) -> list[dict[str, Any]]:
     try:
         data = _load_json_file_cached(model_dict_path)
     except Exception as exc:
-        logger.warning(
-            "Failed to load default model info from live2ds/model_dict.json: %s",
-            exc,
-        )
-        return []
+        logger.error("Failed to load `%s`: %s", model_dict_path, exc)
+        raise RuntimeError(f"Failed to load `{model_dict_path}`: {exc}") from exc
 
     if not isinstance(data, list):
-        return []
+        logger.error(
+            "Invalid model dict in `%s`: expected a JSON array, got `%s`.",
+            model_dict_path,
+            type(data).__name__,
+        )
+        raise RuntimeError(
+            f"Invalid model dict in `{model_dict_path}`: expected a JSON array."
+        )
     return [item for item in data if isinstance(item, dict)]
 
 
@@ -95,11 +109,13 @@ def _parse_raw_model_info(raw_model_info: Any) -> dict[str, Any] | None:
     if isinstance(raw_model_info, dict):
         return raw_model_info or None
     if isinstance(raw_model_info, str):
+        if not raw_model_info.strip():
+            return None
         try:
             parsed = json.loads(raw_model_info)
-        except json.JSONDecodeError:
-            logger.warning("Invalid `model_info_json`, falling back to empty object.")
-            return None
+        except json.JSONDecodeError as exc:
+            logger.error("Invalid `model_info_json`: %s", exc)
+            raise ValueError(f"Invalid `model_info_json`: {exc}") from exc
         if isinstance(parsed, dict) and parsed:
             return parsed
     return None

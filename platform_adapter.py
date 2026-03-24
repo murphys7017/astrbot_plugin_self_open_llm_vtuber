@@ -277,7 +277,15 @@ class OLVPetPlatformAdapter(Platform):
         )
         if not self.runtime_state.should_send_model_payload(payload, force=force):
             return
-        await self._send_json(payload)
+        sent = await self._send_json(payload)
+        if not sent:
+            logger.warning(
+                "Failed to deliver current model/config payload "
+                "(conf_uid=%s, model_name=%s). Will retry on next refresh.",
+                self.conf_uid,
+                self.runtime_state.live2d_model_name or "<default>",
+            )
+            return
         self.runtime_state.mark_model_payload_sent(payload)
 
     async def _refresh_and_send_current_model_and_conf(self, *, force: bool = False) -> None:
