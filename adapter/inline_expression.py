@@ -8,6 +8,7 @@ from typing import Any
 
 LIVE2D_BASE_EXPRESSION_EXTRA_KEY = "live2d_base_expression"
 LIVE2D_MOTION_ID_EXTRA_KEY = "live2d_motion_id"
+_JSON_FILE_CACHE: dict[tuple[str, int, int], Any] = {}
 
 _BASE_EXPRESSION_TAG_PATTERN = re.compile(
     r"^\s*<~(?P<base_expression>[^~<>\r\n]{1,64})~>\s*"
@@ -25,7 +26,7 @@ def collect_available_base_expressions(
         return []
 
     try:
-        data = json.loads(model_dict_path.read_text(encoding="utf-8"))
+        data = _load_json_file_cached(model_dict_path)
     except Exception:
         return []
 
@@ -73,7 +74,7 @@ def collect_available_motion_ids(
         return []
 
     try:
-        data = json.loads(model_dict_path.read_text(encoding="utf-8"))
+        data = _load_json_file_cached(model_dict_path)
     except Exception:
         return []
 
@@ -640,7 +641,7 @@ def _resolve_default_model_name(live2ds_dir: Path) -> str:
     if not model_dict_path.exists():
         return ""
     try:
-        payload = json.loads(model_dict_path.read_text(encoding="utf-8"))
+        payload = _load_json_file_cached(model_dict_path)
     except Exception:
         return ""
     if not isinstance(payload, list) or not payload:
@@ -682,12 +683,23 @@ def _load_motion_catalog_payload(
         if not path.exists() or not path.is_file():
             continue
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = _load_json_file_cached(path)
         except Exception:
             continue
         if payload is not None:
             return payload
     return None
+
+
+def _load_json_file_cached(path: Path) -> Any:
+    stat = path.stat()
+    cache_key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+    if cache_key in _JSON_FILE_CACHE:
+        return _JSON_FILE_CACHE[cache_key]
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    _JSON_FILE_CACHE[cache_key] = payload
+    return payload
 
 
 def _parse_motion_catalog_payload(payload: Any) -> dict[str, str]:

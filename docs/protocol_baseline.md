@@ -92,8 +92,6 @@
 - 字段：
   - `type: "audio"`
   - `audio_url?: string | null`
-  - `volumes?: number[]`
-  - `slice_length?: number`
   - `display_text?: { text, name, avatar }`
   - `actions?: { expressions?, motions?, expression_decision?, pictures?, sounds? }`
   - `forwarded?: boolean`
@@ -148,13 +146,10 @@
 ### 前端 -> 后端
 
 - `fetch-backgrounds`
-- `fetch-configs`
 - `fetch-history-list`
 - `create-new-history`
 - `fetch-and-set-history`
 - `delete-history`
-- `switch-config`
-- `request-init-config`
 - `heartbeat`
 - `audio-play-start`
 - `raw-audio-data`
@@ -162,12 +157,10 @@
 ### 后端 -> 前端
 
 - `background-files`
-- `config-files`
 - `history-list`
 - `history-data`
 - `new-history-created`
 - `history-deleted`
-- `config-switched`
 - `heartbeat-ack`
 - `group-update`
 
@@ -203,12 +196,6 @@
 - 前端会发送
 - 后端当前未正式接入
 - 属于未来能力，不在当前桌宠主链路基线内
-
-### 6. `switch-config.file`
-
-- 前端发送 `file`
-- 后端当前只返回“未启用”
-- 字段已存在，但功能未正式实现
 
 ## 4. 收敛原则
 

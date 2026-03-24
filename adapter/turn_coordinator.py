@@ -78,13 +78,10 @@ class TurnCoordinator:
 
         if msg_type in {
             "fetch-backgrounds",
-            "fetch-configs",
             "fetch-history-list",
             "create-new-history",
             "fetch-and-set-history",
             "delete-history",
-            "switch-config",
-            "request-init-config",
             "heartbeat",
             "audio-play-start",
         }:
@@ -268,8 +265,6 @@ class TurnCoordinator:
 
     async def _commit_inbound_message(self, message_obj) -> None:
         async with self._turn_lock:
-            self._refresh_runtime_settings()
-            await self._send_current_model_and_conf()
             if self.session_state.waiting_for_playback_complete:
                 await self.finalize_turn()
 

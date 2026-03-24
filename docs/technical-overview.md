@@ -14,7 +14,7 @@
 
 - 音频转换为 wav 后缓存到插件数据目录 `cache/audio/`
 - 前端通过 `http://<host>:<http_port>/cache/audio/<uuid>.wav` 拉取
-- WebSocket 主要下发 `audio_url + volumes + display_text + actions`
+- WebSocket 主要下发 `audio_url + display_text + actions`
 
 ### `model_info` 运行时动态解析
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from astrbot.api import logger
@@ -15,6 +16,8 @@ from .inline_expression import (
     normalize_base_expression_key,
     normalize_motion_id,
 )
+
+EXPRESSION_PLANNER_TIMEOUT_SECONDS = 0.35
 
 
 async def build_expression_actions(
@@ -76,15 +79,27 @@ async def build_expression_actions(
             provider_id = "<unknown>"
         logger.debug("Planning base expression with provider: %s", provider_id)
         try:
-            decision = await plan_base_expression(
-                runtime_state.selected_expression_provider,
-                persona=runtime_state.default_persona,
-                chatbuffer=chat_buffer.to_list(),
-                user_input=last_user_text,
-                reply_text=reply_text,
-                emotion_map_keys=action_map_keys,
+            decision = await asyncio.wait_for(
+                plan_base_expression(
+                    runtime_state.selected_expression_provider,
+                    persona=runtime_state.default_persona,
+                    chatbuffer=chat_buffer.to_list(),
+                    user_input=last_user_text,
+                    reply_text=reply_text,
+                    emotion_map_keys=action_map_keys,
+                ),
+                timeout=EXPRESSION_PLANNER_TIMEOUT_SECONDS,
             )
             decision_source = "expression_provider"
+        except asyncio.TimeoutError:
+            planner_error = (
+                "expression planner timed out after "
+                f"{EXPRESSION_PLANNER_TIMEOUT_SECONDS:.2f}s"
+            )
+            logger.warning(
+                "Base expression planner timed out after %.2fs, fallback to rule-based decision.",
+                EXPRESSION_PLANNER_TIMEOUT_SECONDS,
+            )
         except BaseExpressionPlanningError as exc:
             planner_error = str(exc)
             logger.warning(

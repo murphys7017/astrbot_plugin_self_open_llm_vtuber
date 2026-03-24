@@ -7,6 +7,7 @@ from typing import Any
 from astrbot.api import logger
 
 DEFAULT_LIVE2D_MODEL_NAME = "Mk6_1.0"
+_JSON_FILE_CACHE: dict[tuple[str, int, int], Any] = {}
 
 
 def parse_model_info(
@@ -66,7 +67,7 @@ def _load_model_dict_entries(live2ds_dir: Path) -> list[dict[str, Any]]:
         return []
 
     try:
-        data = json.loads(model_dict_path.read_text(encoding="utf-8"))
+        data = _load_json_file_cached(model_dict_path)
     except Exception as exc:
         logger.warning(
             "Failed to load default model info from live2ds/model_dict.json: %s",
@@ -77,6 +78,17 @@ def _load_model_dict_entries(live2ds_dir: Path) -> list[dict[str, Any]]:
     if not isinstance(data, list):
         return []
     return [item for item in data if isinstance(item, dict)]
+
+
+def _load_json_file_cached(path: Path) -> Any:
+    stat = path.stat()
+    cache_key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+    if cache_key in _JSON_FILE_CACHE:
+        return _JSON_FILE_CACHE[cache_key]
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    _JSON_FILE_CACHE[cache_key] = payload
+    return payload
 
 
 def _parse_raw_model_info(raw_model_info: Any) -> dict[str, Any] | None:

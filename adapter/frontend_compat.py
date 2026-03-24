@@ -6,13 +6,10 @@ from uuid import uuid4
 
 SUPPORTED_COMPAT_MESSAGE_TYPES = {
     "fetch-backgrounds",
-    "fetch-configs",
     "fetch-history-list",
     "create-new-history",
     "fetch-and-set-history",
     "delete-history",
-    "switch-config",
-    "request-init-config",
     "heartbeat",
     "audio-play-start",
 }
@@ -46,8 +43,6 @@ class FrontendCompatHandler:
             await send_json(
                 {"type": "background-files", "files": self._background_files_getter()}
             )
-        elif msg_type == "fetch-configs":
-            await send_json({"type": "config-files", "configs": []})
         elif msg_type == "fetch-history-list":
             histories = await self._history_bridge.list_histories()
             await send_json({"type": "history-list", "histories": histories})
@@ -73,14 +68,5 @@ class FrontendCompatHandler:
                     "history_uid": history_uid,
                 }
             )
-        elif msg_type == "switch-config":
-            await send_json(
-                {
-                    "type": "config-switched",
-                    "message": "Config switch is not enabled in this adapter.",
-                }
-            )
-        elif msg_type == "request-init-config":
-            await refresh_and_send_model(force=True)
         elif msg_type == "heartbeat":
             await send_json({"type": "heartbeat-ack"})
