@@ -35,6 +35,9 @@ class ConversationHistoryBridge:
         self._speaker_name = speaker_name
         self._chat_buffer = chat_buffer
 
+    def set_client_uid(self, client_uid: str) -> None:
+        self._client_uid = client_uid
+
     async def list_histories(self) -> list[dict[str, Any]]:
         conv_mgr = self._get_conversation_manager()
         if conv_mgr is None:

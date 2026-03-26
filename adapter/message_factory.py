@@ -8,6 +8,7 @@ from astrbot.api.message_components import Plain
 from astrbot.api.platform import AstrBotMessage, MessageMember, MessageType
 from astrbot.api import logger
 
+from .client_profile import DEFAULT_CLIENT_NICKNAME, normalize_client_nickname
 from .protocol import normalize_inbound_message
 
 
@@ -16,13 +17,19 @@ class MessageFactory:
         self,
         *,
         client_uid: str,
+        nickname: str = DEFAULT_CLIENT_NICKNAME,
         media_service,
         image_cooldown_seconds_getter: Callable[[], int],
     ) -> None:
         self.client_uid = client_uid
+        self.nickname = normalize_client_nickname(nickname)
         self.media_service = media_service
         self._image_cooldown_seconds_getter = image_cooldown_seconds_getter
         self._last_accepted_image_at_monotonic: float | None = None
+
+    def set_client_profile(self, client_uid: str, nickname: str) -> None:
+        self.client_uid = client_uid
+        self.nickname = normalize_client_nickname(nickname)
 
     def convert_message(self, data: dict[str, Any]) -> AstrBotMessage:
         inbound = normalize_inbound_message(data)
@@ -48,7 +55,7 @@ class MessageFactory:
         abm.session_id = self.client_uid
         abm.message_id = str(uuid4())
         abm.message_str = text
-        abm.sender = MessageMember(user_id=self.client_uid, nickname="DesktopUser")
+        abm.sender = MessageMember(user_id=self.client_uid, nickname=self.nickname)
         abm.message = [Plain(text=text)]
         normalized_raw_message = dict(raw_message)
         resolved_image_inputs: list[dict[str, str]] = []

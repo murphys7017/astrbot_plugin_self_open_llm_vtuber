@@ -15,6 +15,12 @@ from typing import Any
 
 from .adapter.audio_runtime import create_vad_engine
 from .adapter.chat_buffer import ChatBuffer
+from .adapter.client_profile import (
+    DEFAULT_CLIENT_NICKNAME,
+    DEFAULT_CLIENT_UID,
+    normalize_client_nickname,
+    normalize_client_uid,
+)
 from .adapter.frontend_compat import FrontendCompatHandler
 from .adapter.history_bridge import ConversationHistoryBridge
 from .adapter.media_service import MediaService
@@ -62,13 +68,24 @@ class OLVPetPlatformAdapter(Platform):
         self.host = _config_get(self.config, "host", "127.0.0.1")
         self.port = int(_config_get(self.config, "port", 12396))
         self.http_port = int(_config_get(self.config, "http_port", 12397))
-        self.client_uid = "desktop-client"
+        self._plugin_context = get_plugin_context()
+        self._plugin_config = get_plugin_config() or {}
+        self.client_uid = normalize_client_uid(
+            _plugin_config_get(self._plugin_config, "client_uid", DEFAULT_CLIENT_UID),
+            DEFAULT_CLIENT_UID,
+        )
+        self.client_nickname = normalize_client_nickname(
+            _plugin_config_get(
+                self._plugin_config,
+                "client_nickname",
+                DEFAULT_CLIENT_NICKNAME,
+            ),
+            DEFAULT_CLIENT_NICKNAME,
+        )
         self.conf_name = _config_get(self.config, "conf_name", "AstrBot Desktop")
         self.conf_uid = _config_get(self.config, "conf_uid", "astrbot-desktop")
         self.speaker_name = _config_get(self.config, "speaker_name", "AstrBot")
         self.auto_start_mic = bool(_config_get(self.config, "auto_start_mic", True))
-        self._plugin_context = get_plugin_context()
-        self._plugin_config = get_plugin_config() or {}
         self.runtime_state = RuntimeState(
             platform_config=self.config,
             plugin_context=self._plugin_context,
@@ -100,21 +117,23 @@ class OLVPetPlatformAdapter(Platform):
         )
         self.message_factory = MessageFactory(
             client_uid=self.client_uid,
+            nickname=self.client_nickname,
             media_service=self.media_service,
             image_cooldown_seconds_getter=lambda: self.runtime_state.image_cooldown_seconds,
         )
         self.chat_buffer = ChatBuffer(
             maxlen=int(_plugin_config_get(self.runtime_state.plugin_config, "chat_buffer_size", 10))
         )
+        self.history_bridge = ConversationHistoryBridge(
+            plugin_context=self._plugin_context,
+            platform_id="olv_pet_adapter",
+            client_uid=self.client_uid,
+            speaker_name=self.speaker_name,
+            chat_buffer=self.chat_buffer,
+        )
         self.frontend_compat_handler = FrontendCompatHandler(
             background_files_getter=lambda: list_background_files(FRONTEND_ASSETS_DIR),
-            history_bridge=ConversationHistoryBridge(
-                plugin_context=self._plugin_context,
-                platform_id="olv_pet_adapter",
-                client_uid=self.client_uid,
-                speaker_name=self.speaker_name,
-                chat_buffer=self.chat_buffer,
-            ),
+            history_bridge=self.history_bridge,
         )
         self.transport = WebSocketTransport(
             host=self.host,
@@ -249,6 +268,7 @@ class OLVPetPlatformAdapter(Platform):
 
     def _refresh_runtime_settings(self) -> None:
         vad_settings_changed = self.runtime_state.refresh()
+        self._sync_client_profile_from_runtime_state()
         if self._vad_engine is not None and vad_settings_changed:
             self._vad_engine = None
 
@@ -262,6 +282,7 @@ class OLVPetPlatformAdapter(Platform):
             reload_persona=reload_persona,
             reload_providers=reload_providers,
         )
+        self._sync_client_profile_from_runtime_state()
         if self._vad_engine is not None and vad_settings_changed:
             self._vad_engine = None
 
@@ -306,6 +327,22 @@ class OLVPetPlatformAdapter(Platform):
         self.session_state.reset_to_idle()
         await self.turn_coordinator.speech_ingress.handle_audio_stream_interrupt()
         await self.media_service.clear_audio_buffer()
+
+    def _sync_client_profile_from_runtime_state(self) -> None:
+        self.client_uid = normalize_client_uid(
+            getattr(self.runtime_state, "client_uid", self.client_uid),
+            DEFAULT_CLIENT_UID,
+        )
+        self.client_nickname = normalize_client_nickname(
+            getattr(self.runtime_state, "client_nickname", self.client_nickname),
+            DEFAULT_CLIENT_NICKNAME,
+        )
+        self.session_state.client_uid = self.client_uid
+        self.message_factory.set_client_profile(
+            self.client_uid,
+            self.client_nickname,
+        )
+        self.history_bridge.set_client_uid(self.client_uid)
 
 def _config_get(config: Any, key: str, default: Any) -> Any:
     if config is None:

@@ -7,6 +7,12 @@ from typing import Any
 from astrbot.api import logger
 from astrbot.api.provider import STTProvider
 
+from .client_profile import (
+    DEFAULT_CLIENT_NICKNAME,
+    DEFAULT_CLIENT_UID,
+    normalize_client_nickname,
+    normalize_client_uid,
+)
 from .model_info import DEFAULT_LIVE2D_MODEL_NAME, parse_model_info
 from .payload_builder import build_set_model_and_conf
 
@@ -26,7 +32,8 @@ class RuntimeState:
         self.platform_config = platform_config
         self.host = host
         self.http_port = http_port
-        self.client_uid = client_uid
+        self.client_uid = normalize_client_uid(client_uid, DEFAULT_CLIENT_UID)
+        self.client_nickname = DEFAULT_CLIENT_NICKNAME
         self.live2ds_dir = live2ds_dir
 
         self.plugin_config = self._clone_plugin_config(plugin_config)
@@ -90,6 +97,18 @@ class RuntimeState:
         previous_vad_model = self.vad_model
         previous_vad_config = dict(self.vad_config)
 
+        self.client_uid = normalize_client_uid(
+            _plugin_config_get(self.plugin_config, "client_uid", self.client_uid),
+            DEFAULT_CLIENT_UID,
+        )
+        self.client_nickname = normalize_client_nickname(
+            _plugin_config_get(
+                self.plugin_config,
+                "client_nickname",
+                self.client_nickname,
+            ),
+            DEFAULT_CLIENT_NICKNAME,
+        )
         self.stt_provider_id = _plugin_config_get(self.plugin_config, "stt_provider_id", "")
         self.vad_model = _plugin_config_get(self.plugin_config, "vad_model", "silero_vad")
         self.vad_config = {
