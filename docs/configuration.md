@@ -39,12 +39,6 @@
 - 默认值：`""`
 - 说明：优先使用的 STT Provider；留空时尝试使用 AstrBot 当前 STT Provider。
 
-### `expression_provider_id`
-
-- 类型：`string`
-- 默认值：`""`
-- 说明：用于基础情绪/基础表情判断的聊天模型 Provider（仅文本上下文）。
-
 ### `motion_candidate_limit`
 
 - 类型：`int`

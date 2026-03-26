@@ -5,7 +5,7 @@ from copy import deepcopy
 from typing import Any
 
 from astrbot.api import logger
-from astrbot.api.provider import Provider, STTProvider
+from astrbot.api.provider import STTProvider
 
 from .model_info import DEFAULT_LIVE2D_MODEL_NAME, parse_model_info
 from .payload_builder import build_set_model_and_conf
@@ -33,7 +33,6 @@ class RuntimeState:
         self.plugin_context = plugin_context
 
         self.stt_provider_id = ""
-        self.expression_provider_id = ""
         self.vad_model = "silero_vad"
         self.vad_config: dict[str, Any] = {}
         self.live2d_model_name = DEFAULT_LIVE2D_MODEL_NAME
@@ -41,7 +40,6 @@ class RuntimeState:
         self.image_cooldown_seconds = 60
         self.default_persona: dict[str, Any] | None = None
         self.selected_stt_provider: STTProvider | None = None
-        self.selected_expression_provider: Provider | None = None
         self.last_sent_model_signature: str | None = None
 
     async def load_default_persona(self) -> None:
@@ -89,14 +87,10 @@ class RuntimeState:
             self.plugin_config = latest_plugin_config
 
         previous_stt_provider_id = self.stt_provider_id
-        previous_expression_provider_id = self.expression_provider_id
         previous_vad_model = self.vad_model
         previous_vad_config = dict(self.vad_config)
 
         self.stt_provider_id = _plugin_config_get(self.plugin_config, "stt_provider_id", "")
-        self.expression_provider_id = _plugin_config_get(
-            self.plugin_config, "expression_provider_id", ""
-        )
         self.vad_model = _plugin_config_get(self.plugin_config, "vad_model", "silero_vad")
         self.vad_config = {
             "orig_sr": 16000,
@@ -141,33 +135,19 @@ class RuntimeState:
             self.model_info.get("url", "<missing>"),
         )
 
-        provider_config_changed = (
-            previous_stt_provider_id != self.stt_provider_id
-            or previous_expression_provider_id != self.expression_provider_id
-        )
+        provider_config_changed = previous_stt_provider_id != self.stt_provider_id
         provider_binding_missing = (
             (self.stt_provider_id and self.selected_stt_provider is None)
             or (not self.stt_provider_id and self.selected_stt_provider is not None)
-            or (
-                self.expression_provider_id
-                and self.selected_expression_provider is None
-            )
-            or (
-                not self.expression_provider_id
-                and self.selected_expression_provider is not None
-            )
         )
         if provider_config_changed or provider_binding_missing:
             logger.info(
-                "Provider runtime settings changed, reloading provider bindings "
-                "(stt: %s -> %s, expression: %s -> %s)",
+                "Provider runtime settings changed, reloading STT provider binding "
+                "(stt: %s -> %s)",
                 previous_stt_provider_id or "<default>",
                 self.stt_provider_id or "<default>",
-                previous_expression_provider_id or "<disabled>",
-                self.expression_provider_id or "<disabled>",
             )
             self.selected_stt_provider = None
-            self.selected_expression_provider = None
             self.load_selected_providers()
 
         return (
@@ -188,7 +168,6 @@ class RuntimeState:
 
         if reload_providers:
             self.selected_stt_provider = None
-            self.selected_expression_provider = None
             self.load_selected_providers()
 
         return vad_changed
@@ -219,20 +198,6 @@ class RuntimeState:
             if isinstance(provider, STTProvider):
                 self.selected_stt_provider = provider
                 logger.info("Using current STT provider: %s", provider.meta().id)
-
-        if self.expression_provider_id:
-            provider = self.plugin_context.get_provider_by_id(self.expression_provider_id)
-            if isinstance(provider, Provider):
-                self.selected_expression_provider = provider
-                logger.info(
-                    "Loaded expression planner provider from plugin config: %s",
-                    self.expression_provider_id,
-                )
-            else:
-                logger.warning(
-                    "Configured expression provider `%s` not found or not a chat Provider.",
-                    self.expression_provider_id,
-                )
 
     def build_current_model_payload(
         self,

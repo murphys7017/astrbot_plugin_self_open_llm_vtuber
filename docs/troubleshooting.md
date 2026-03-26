@@ -30,7 +30,7 @@
 
 检查项：
 
-- `expression_provider_id` 是否正确且 Provider 可用
+- 当前聊天模型是否按注入提示输出了 `<@anim ...>` 或 `<~...~>` 标签
 - 当前模型是否配置 `emotionMap`/`motionMap`
 - 若使用 `motion_id`，是否存在对应 `motion_catalog.json` 或可匹配条目
 

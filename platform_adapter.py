@@ -182,10 +182,6 @@ class OLVPetPlatformAdapter(Platform):
     def _selected_stt_provider(self):
         return self.runtime_state.selected_stt_provider
 
-    @property
-    def _selected_expression_provider(self):
-        return self.runtime_state.selected_expression_provider
-
     async def run(self):
         try:
             await self.transport.start()

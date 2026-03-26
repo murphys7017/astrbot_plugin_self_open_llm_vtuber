@@ -1,23 +1,18 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from astrbot.api import logger
 
 from .base_expression_planner import (
     BaseExpressionDecision,
-    BaseExpressionPlanningError,
     build_fallback_base_expression_decision,
-    plan_base_expression,
 )
 from .inline_expression import (
     collect_motion_catalog_asset_map,
     normalize_base_expression_key,
     normalize_motion_id,
 )
-
-EXPRESSION_PLANNER_TIMEOUT_SECONDS = 0.35
 
 
 async def build_expression_actions(
@@ -55,7 +50,6 @@ async def build_expression_actions(
     normalized_inline_expression = normalize_base_expression_key(inline_base_expression)
     normalized_inline_motion = normalize_motion_id(inline_motion_id)
     decision_source = "fallback"
-    planner_error = None
     motion_error = None
     motion_source = ""
 
@@ -68,47 +62,6 @@ async def build_expression_actions(
         decision_source = "inline_tag"
     else:
         decision = build_fallback_base_expression_decision(reply_text, action_map_keys)
-
-    if (
-        decision_source != "inline_tag"
-        and runtime_state.selected_expression_provider is not None
-    ):
-        try:
-            provider_id = runtime_state.selected_expression_provider.meta().id
-        except Exception:
-            provider_id = "<unknown>"
-        logger.debug("Planning base expression with provider: %s", provider_id)
-        try:
-            decision = await asyncio.wait_for(
-                plan_base_expression(
-                    runtime_state.selected_expression_provider,
-                    persona=runtime_state.default_persona,
-                    chatbuffer=chat_buffer.to_list(),
-                    user_input=last_user_text,
-                    reply_text=reply_text,
-                    emotion_map_keys=action_map_keys,
-                ),
-                timeout=EXPRESSION_PLANNER_TIMEOUT_SECONDS,
-            )
-            decision_source = "expression_provider"
-        except asyncio.TimeoutError:
-            planner_error = (
-                "expression planner timed out after "
-                f"{EXPRESSION_PLANNER_TIMEOUT_SECONDS:.2f}s"
-            )
-            logger.warning(
-                "Base expression planner timed out after %.2fs, fallback to rule-based decision.",
-                EXPRESSION_PLANNER_TIMEOUT_SECONDS,
-            )
-        except BaseExpressionPlanningError as exc:
-            planner_error = str(exc)
-            logger.warning(
-                "Base expression planner validation failed, fallback to neutral: %s",
-                exc,
-            )
-        except Exception as exc:
-            planner_error = str(exc)
-            logger.warning("Base expression planner failed, fallback to neutral: %s", exc)
 
     resolved_motions: list[str] = []
     if normalized_inline_motion:
@@ -186,8 +139,6 @@ async def build_expression_actions(
             "expressions": [resolved_expression],
             "expression_decision": decision_payload,
         }
-    if planner_error:
-        actions["expression_decision_error"] = planner_error
     if motion_error:
         actions["motion_decision_error"] = motion_error
     logger.info(
