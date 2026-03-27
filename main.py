@@ -1,5 +1,6 @@
 from pathlib import Path
 import logging
+import json
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -26,6 +27,10 @@ class MyPlugin(Star):
 
         self.context = context
         self.config = config if config is not None else {}
+
+        # 自动同步模型选项到配置面板
+        _sync_model_options()
+
         _configure_noisy_loggers()
         set_plugin_context(context)
         set_plugin_config(self.config)
@@ -181,3 +186,74 @@ def _plugin_config_value(config: dict | None, key: str, default):
         value = config.get(key, default)
         return default if value is None else value
     return default
+
+
+def _sync_model_options() -> None:
+    """
+    自动同步 model_dict.json 中的模型列表到 _conf_schema.json 的下拉选项。
+    在插件初始化时调用。
+    """
+    try:
+        plugin_dir = Path(__file__).resolve().parent
+        model_dict_path = plugin_dir / "live2ds" / "model_dict.json"
+        conf_schema_path = plugin_dir / "_conf_schema.json"
+
+        if not model_dict_path.exists() or not conf_schema_path.exists():
+            return
+
+        # 读取 model_dict.json
+        with open(model_dict_path, "r", encoding="utf-8") as f:
+            model_dict = json.load(f)
+
+        if not isinstance(model_dict, list):
+            return
+
+        # 提取模型名称
+        model_names = []
+        for item in model_dict:
+            if isinstance(item, dict) and "name" in item:
+                name = item["name"].strip()
+                if name:
+                    model_names.append(name)
+
+        if not model_names:
+            return
+
+        # 读取并更新 _conf_schema.json
+        with open(conf_schema_path, "r", encoding="utf-8") as f:
+            conf_schema = json.load(f)
+
+        if (
+            "live2d_model_name" not in conf_schema
+            or not isinstance(conf_schema["live2d_model_name"], dict)
+        ):
+            return
+
+        old_options = conf_schema["live2d_model_name"].get("options", [])
+        if old_options == model_names:
+            # 选项没有变化，无需更新
+            return
+
+        conf_schema["live2d_model_name"]["options"] = model_names
+
+        # 如果默认值不在新列表中，使用第一个模型作为默认值
+        default_name = conf_schema["live2d_model_name"].get("default")
+        if default_name not in model_names and model_names:
+            conf_schema["live2d_model_name"]["default"] = model_names[0]
+            logger.info(
+                "[ModelSync] 默认模型已更新为: %s",
+                model_names[0],
+            )
+
+        # 写回 _conf_schema.json
+        with open(conf_schema_path, "w", encoding="utf-8") as f:
+            json.dump(conf_schema, f, ensure_ascii=False, indent=2)
+
+        logger.info(
+            "[ModelSync] 模型选项已同步: %s -> %s",
+            old_options,
+            model_names,
+        )
+
+    except Exception as exc:
+        logger.warning("[ModelSync] 同步模型选项时出错: %s", exc)
