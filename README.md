@@ -122,6 +122,13 @@ npm run build:web
 - 检查前端是否发出了 `mic-audio-data` / `mic-audio-end`
 - 若使用 `raw-audio-data`，确认 `silero-vad` 可用
 
+### 添加新模型后下拉菜单不显示
+
+插件已支持**自动同步**：
+1. 确保模型已添加到 `live2ds/model_dict.json`
+2. **重启 AstrBot** — 插件会自动同步模型列表到配置面板
+3. 或手动运行 `同步模型选项.bat`（Windows）/ `python sync_model_options.py`
+
 ## 文档索引
 
 - 配置参考：[docs/configuration.md](docs/configuration.md)

@@ -33,6 +33,14 @@
 - 默认值：`Mk6_1.0`
 - 说明：启动时加载的 Live2D 模型名，需存在于 `live2ds/model_dict.json`。
 
+### 添加新 Live2D 模型
+
+1. 将模型文件夹放入 `live2ds/` 目录
+2. 在 `live2ds/model_dict.json` 中添加模型配置（参考现有格式）
+3. **重启 AstrBot** — 插件会自动同步模型列表到配置面板下拉菜单
+
+> 提示：也可以手动运行 `同步模型选项.bat`（Windows）或 `python sync_model_options.py` 来立即同步。
+
 ### `stt_provider_id`
 
 - 类型：`string`
