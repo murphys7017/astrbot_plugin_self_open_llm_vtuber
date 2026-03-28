@@ -24,7 +24,7 @@
   "image_cooldown_seconds": {
     "description": "图片输入冷却时间（秒）。在冷却时间内再次收到图片会直接丢弃，仅保留文本。",
     "type": "int",
-    "default": 60
+    "default": 0
   },
   "live2d_model_name": {
     "description": "启动时使用的 Live2D 模型。",

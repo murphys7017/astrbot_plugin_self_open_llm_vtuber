@@ -44,7 +44,7 @@ class RuntimeState:
         self.vad_config: dict[str, Any] = {}
         self.live2d_model_name = DEFAULT_LIVE2D_MODEL_NAME
         self.model_info: dict[str, Any] = {}
-        self.image_cooldown_seconds = 60
+        self.image_cooldown_seconds = 0
         self.default_persona: dict[str, Any] | None = None
         self.selected_stt_provider: STTProvider | None = None
         self.last_sent_model_signature: str | None = None
@@ -131,7 +131,7 @@ class RuntimeState:
             ),
         }
         self.image_cooldown_seconds = max(
-            int(_plugin_config_get(self.plugin_config, "image_cooldown_seconds", 60)),
+            int(_plugin_config_get(self.plugin_config, "image_cooldown_seconds", 0)),
             0,
         )
         self.live2d_model_name = _plugin_config_get(

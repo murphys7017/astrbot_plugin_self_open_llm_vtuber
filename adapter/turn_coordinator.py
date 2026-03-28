@@ -293,6 +293,22 @@ class TurnCoordinator:
         if not isinstance(diagnostics, list) or not diagnostics:
             return
 
+        cooldown_diagnostics = [
+            item for item in diagnostics
+            if isinstance(item, dict) and str(item.get("reason") or "").strip() == "cooldown_window"
+        ]
+        if cooldown_diagnostics:
+            remaining_seconds = max(
+                int(str(item.get("remaining_seconds") or "0") or "0")
+                for item in cooldown_diagnostics
+            )
+            cooldown_message = (
+                "Image input skipped by cooldown window. "
+                f"Wait about {remaining_seconds}s, or set `image_cooldown_seconds` to 0."
+            )
+            logger.info("Image input diagnostics: %s", cooldown_message)
+            await self._send_json(build_error(cooldown_message))
+
         actionable_reasons = [
             str(item.get("reason") or "").strip()
             for item in diagnostics

@@ -48,6 +48,13 @@ class MessageFactory:
     ) -> AstrBotMessage:
         images = images or []
         accepted_images, image_diagnostics = self._apply_image_cooldown(images)
+        if images:
+            logger.info(
+                "Inbound desktop message received %s image(s); accepted_after_cooldown=%s text=%s",
+                len(images),
+                len(accepted_images),
+                (text or "")[:80],
+            )
 
         abm = AstrBotMessage()
         abm.type = MessageType.FRIEND_MESSAGE
@@ -90,6 +97,17 @@ class MessageFactory:
         if all_image_diagnostics:
             normalized_raw_message["image_input_diagnostics"] = all_image_diagnostics
         abm.raw_message = normalized_raw_message
+
+        if images:
+            logger.info(
+                "Inbound desktop image processing finished: received=%s accepted=%s resolved=%s "
+                "cooldown_dropped=%s failed=%s",
+                len(images),
+                len(accepted_images),
+                len(resolved_image_inputs),
+                dropped_image_count,
+                len(failed_image_diagnostics),
+            )
 
         return abm
 
