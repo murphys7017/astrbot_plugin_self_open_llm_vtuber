@@ -89,7 +89,11 @@ class TurnCoordinator:
             return
 
         if msg_type == "frontend-playback-complete":
-            await self.finalize_turn()
+            success_raw = message.get("success")
+            success = success_raw if isinstance(success_raw, bool) else True
+            reason_raw = message.get("reason")
+            reason = reason_raw.strip() if isinstance(reason_raw, str) and reason_raw.strip() else None
+            await self.finalize_turn(success=success, reason=reason)
             return
 
         if msg_type == "interrupt-signal":
@@ -249,19 +253,27 @@ class TurnCoordinator:
                 len(picture_paths),
             )
 
-    async def finalize_turn(self) -> None:
+    async def finalize_turn(self, *, success: bool = True, reason: str | None = None) -> None:
         if not self.session_state.waiting_for_playback_complete:
             return
         await self._send_json(build_force_new_message())
         await self._send_json(build_control("conversation-chain-end"))
         self.session_state.mark_playback_complete()
         self._mark_turn_timing("playback_completed_at")
-        logger.debug(
-            "Turn timing playback: turn=%s playback_ms=%.1f total_ms=%.1f",
+        log_message = (
+            "Turn timing playback: turn=%s playback_ms=%.1f total_ms=%.1f success=%s reason=%s"
+        )
+        log_args = (
             self._current_turn_index(),
             self._elapsed_ms("audio_payload_sent_at", "playback_completed_at"),
             self._elapsed_ms("received_at", "playback_completed_at"),
+            success,
+            reason or "",
         )
+        if success:
+            logger.debug(log_message, *log_args)
+        else:
+            logger.warning(log_message, *log_args)
 
     async def _commit_inbound_message(self, message_obj) -> None:
         async with self._turn_lock:
