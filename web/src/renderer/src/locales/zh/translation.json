@@ -31,6 +31,9 @@
       "imageMaxWidthHelp": "图片缩放的最大宽度。超过此宽度的图片会按比例缩小。设为0表示不限制大小。此功能存在的原因是某些AI模型在处理超大尺寸图片时可能存在限制。但是大部分AI模型都能自动处理图片，因此默认值为0（不限制），以保持您原始图片的完整性。"
     },
     "live2d": {
+      "model": "模型",
+      "selectModel": "选择模型",
+      "modelListError": "无法读取 live2ds/model_dict.json",
       "pointerInteractive": "鼠标交互",
       "scrollToResize": "启用滚轮缩放"
     },

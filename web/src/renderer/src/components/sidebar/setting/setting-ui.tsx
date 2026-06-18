@@ -108,7 +108,7 @@ function SettingUI({ open, onClose }: SettingUIProps): JSX.Element {
           </DrawerTitle>
           <div {...settingStyles.settingUI.closeButton}>
             <DrawerCloseTrigger asChild onClick={handleCancel}>
-              <CloseButton size="sm" color="white" />
+              <CloseButton size="sm" color="var(--olv-muted)" />
             </DrawerCloseTrigger>
           </div>
         </DrawerHeader>
@@ -164,10 +164,23 @@ function SettingUI({ open, onClose }: SettingUIProps): JSX.Element {
         </DrawerBody>
 
         <DrawerFooter>
-          <Button colorPalette="red" onClick={handleCancel}>
+          <Button
+            variant="outline"
+            borderColor="var(--olv-border)"
+            color="var(--olv-muted)"
+            bg="transparent"
+            _hover={{ bg: 'rgba(255,255,255,0.06)', color: 'var(--olv-text)' }}
+            onClick={handleCancel}
+          >
             {t('common.cancel')}
           </Button>
-          <Button colorPalette="blue" onClick={handleSave}>
+          <Button
+            bg="var(--olv-text)"
+            color="var(--olv-bg)"
+            border="1px solid var(--olv-text)"
+            _hover={{ bg: '#ffffff' }}
+            onClick={handleSave}
+          >
             {t('common.save')}
           </Button>
         </DrawerFooter>

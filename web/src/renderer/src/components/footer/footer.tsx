@@ -42,7 +42,7 @@ const ToggleButton = memo(({ isCollapsed, onToggle }: ToggleButtonProps) => (
   <Box
     {...footerStyles.footer.toggleButton}
     onClick={onToggle}
-    color="whiteAlpha.500"
+    color="var(--olv-muted)"
     style={{
       transform: isCollapsed ? 'rotate(180deg)' : 'rotate(0deg)',
     }}
@@ -56,7 +56,8 @@ ToggleButton.displayName = 'ToggleButton';
 const ActionButtons = memo(({ micOn, onMicToggle, onInterrupt }: ActionButtonsProps) => (
   <HStack gap={2}>
     <IconButton
-      bg={micOn ? 'green.500' : 'red.500'}
+      bg={micOn ? 'rgba(16, 185, 129, 0.14)' : 'rgba(239, 68, 68, 0.12)'}
+      color={micOn ? 'var(--olv-success)' : 'var(--olv-danger)'}
       {...footerStyles.footer.actionButton}
       onClick={onMicToggle}
     >
@@ -64,11 +65,12 @@ const ActionButtons = memo(({ micOn, onMicToggle, onInterrupt }: ActionButtonsPr
     </IconButton>
     <IconButton
       aria-label="Raise hand"
-      bg="yellow.500"
+      bg="rgba(255,255,255,0.06)"
+      color="var(--olv-text)"
       {...footerStyles.footer.actionButton}
       onClick={onInterrupt}
     >
-      <IoHandRightSharp size="24" />
+      <IoHandRightSharp size="20" />
     </IconButton>
   </HStack>
 ));
@@ -127,7 +129,7 @@ function Footer({ isCollapsed = false, onToggle }: FooterProps): JSX.Element {
     <Box {...footerStyles.footer.container(isCollapsed)}>
       <ToggleButton isCollapsed={isCollapsed} onToggle={onToggle} />
 
-      <Box pt="0" px="4">
+      <Box pt="0" px={{ base: '3', md: '4' }}>
         <HStack width="100%" gap={4}>
           <Box>
             <Box mb="1.5">

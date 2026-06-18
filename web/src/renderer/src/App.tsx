@@ -181,11 +181,11 @@ function AppContent(): JSX.Element {
               </Box>
               <Box
                 position="absolute"
-                bottom={isFooterCollapsed ? "39px" : "135px"}
-                left="50%"
-                transform="translateX(-50%)"
-                zIndex={10}
-                width="60%"
+                bottom={isFooterCollapsed ? "48px" : "148px"}
+                right={{ base: "4", md: "6" }}
+                zIndex={20}
+                width={{ base: "calc(100% - 32px)", md: "360px" }}
+                maxWidth="420px"
               >
                 <Subtitle />
               </Box>

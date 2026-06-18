@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from astrbot.api.event import AstrMessageEvent
+from astrbot.api.event import AstrMessageEvent, MessageChain
 
 from .adapter.inline_expression import (
     LIVE2D_BASE_EXPRESSION_EXTRA_KEY,
@@ -25,3 +25,24 @@ class OLVPetPlatformEvent(AstrMessageEvent):
             inline_motion_id=self.get_extra(LIVE2D_MOTION_ID_EXTRA_KEY),
         )
         await super().send(message)
+
+    async def send_streaming(self, generator, use_fallback: bool = False) -> None:
+        buffer: MessageChain | None = None
+
+        try:
+            async for chain in generator:
+                if not isinstance(chain, MessageChain):
+                    continue
+                if chain.type in {"reasoning", "break"}:
+                    continue
+                if buffer is None:
+                    buffer = chain.derive(list(chain.chain or []))
+                else:
+                    buffer.chain.extend(chain.chain or [])
+        except Exception as exc:
+            await self.adapter.turn_coordinator.send_generation_error(str(exc))
+            return
+
+        if buffer and buffer.chain:
+            buffer.squash_plain()
+            await self.send(buffer)

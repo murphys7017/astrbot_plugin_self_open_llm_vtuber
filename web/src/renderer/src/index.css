@@ -1,7 +1,49 @@
-body, html {
-    margin: 0;
-    padding: 0;
-    overflow: visible;
-    background-color: transparent;
+html {
+  --olv-bg: #0a0a0a;
+  --olv-panel: rgba(10, 10, 10, 0.86);
+  --olv-panel-strong: #111111;
+  --olv-panel-soft: rgba(255, 255, 255, 0.035);
+  --olv-border: rgba(255, 255, 255, 0.12);
+  --olv-border-strong: rgba(255, 255, 255, 0.22);
+  --olv-text: #ededed;
+  --olv-muted: #a1a1aa;
+  --olv-subtle: #71717a;
+  --olv-success: #10b981;
+  --olv-warning: #f59e0b;
+  --olv-danger: #ef4444;
+  --olv-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+  color-scheme: dark;
+}
+
+body,
+html {
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  background-color: transparent;
+  font-family:
+    "Segoe UI",
+    "Microsoft YaHei UI",
+    "PingFang SC",
+    sans-serif;
+  letter-spacing: 0;
+  text-rendering: geometricPrecision;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+textarea,
+input,
+select {
+  font: inherit;
+  letter-spacing: 0;
+}
+
+::selection {
+  background: rgba(237, 237, 237, 0.22);
+  color: var(--olv-text);
 }
 

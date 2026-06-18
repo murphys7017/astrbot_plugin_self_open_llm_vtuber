@@ -7,10 +7,12 @@ from typing import Any, Mapping
 
 INBOUND_TEXT_INPUT = "text-input"
 INBOUND_FRONTEND_PLAYBACK_COMPLETE = "frontend-playback-complete"
+INBOUND_SWITCH_LIVE2D_MODEL = "switch-live2d-model"
 
 SUPPORTED_INBOUND_TYPES = {
     INBOUND_TEXT_INPUT,
     INBOUND_FRONTEND_PLAYBACK_COMPLETE,
+    INBOUND_SWITCH_LIVE2D_MODEL,
 }
 
 OUTBOUND_SET_MODEL_AND_CONF = "set-model-and-conf"
@@ -40,11 +42,18 @@ class PlaybackCompletePayload:
 
 
 @dataclass(frozen=True)
+class SwitchLive2DModelPayload:
+    """Normalized payload for a `switch-live2d-model` message."""
+
+    model_name: str
+
+
+@dataclass(frozen=True)
 class InboundMessage:
     """A validated inbound message."""
 
     msg_type: str
-    payload: TextInputPayload | PlaybackCompletePayload
+    payload: TextInputPayload | PlaybackCompletePayload | SwitchLive2DModelPayload
 
 
 def normalize_inbound_message(raw: Mapping[str, Any]) -> InboundMessage:
@@ -55,6 +64,18 @@ def normalize_inbound_message(raw: Mapping[str, Any]) -> InboundMessage:
 
     if msg_type == INBOUND_FRONTEND_PLAYBACK_COMPLETE:
         return InboundMessage(msg_type=msg_type, payload=PlaybackCompletePayload())
+
+    if msg_type == INBOUND_SWITCH_LIVE2D_MODEL:
+        model_name = raw.get("model_name")
+        if not isinstance(model_name, str):
+            raise ProtocolError("`switch-live2d-model` requires `model_name` to be a string.")
+        model_name = model_name.strip()
+        if not model_name:
+            raise ProtocolError("`switch-live2d-model` requires non-empty `model_name`.")
+        return InboundMessage(
+            msg_type=msg_type,
+            payload=SwitchLive2DModelPayload(model_name=model_name),
+        )
 
     text = raw.get("text")
     if not isinstance(text, str):

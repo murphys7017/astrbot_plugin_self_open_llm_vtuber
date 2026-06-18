@@ -10,15 +10,16 @@ export const settingStyles = {
       overflowY: 'auto',
       css: {
         '&::-webkit-scrollbar': {
-          width: '4px',
+          width: '6px',
         },
         '&::-webkit-scrollbar-track': {
-          bg: 'whiteAlpha.100',
-          borderRadius: 'full',
+          background: 'transparent',
         },
         '&::-webkit-scrollbar-thumb': {
-          bg: 'whiteAlpha.300',
-          borderRadius: 'full',
+          background: 'rgba(255,255,255,0.18)',
+          borderRadius: '999px',
+          border: '2px solid transparent',
+          backgroundClip: 'content-box',
         },
       },
     },
@@ -30,8 +31,9 @@ export const settingStyles = {
     },
     title: {
       ml: 4,
-      fontSize: 'lg',
-      fontWeight: 'bold',
+      fontSize: '15px',
+      fontWeight: '600',
+      color: 'var(--olv-text)',
     },
     tabs: {
       root: {
@@ -41,12 +43,15 @@ export const settingStyles = {
       },
       content: {},
       trigger: {
-        color: 'whiteAlpha.600',
+        color: 'var(--olv-muted)',
+        borderRadius: '6px',
+        fontSize: '13px',
         _selected: {
-          color: 'white',
+          color: 'var(--olv-text)',
+          bg: 'rgba(255,255,255,0.06)',
         },
         _hover: {
-          color: 'white',
+          color: 'var(--olv-text)',
         },
       },
       list: {
@@ -55,7 +60,7 @@ export const settingStyles = {
         flexWrap: 'wrap' as const,
         width: '100%',
         borderBottom: '1px solid',
-        borderColor: 'whiteAlpha.200',
+        borderColor: 'var(--olv-border)',
         mb: 4,
         pl: 0,
         gap: 2,
@@ -69,14 +74,15 @@ export const settingStyles = {
       mt: 'auto',
       pt: 4,
       borderTop: '1px solid',
-      borderColor: 'whiteAlpha.200',
+      borderColor: 'var(--olv-border)',
     },
     drawerContent: {
-      bg: 'gray.900',
+      bg: 'var(--olv-bg)',
       maxWidth: '440px',
       height: isElectron ? 'calc(100vh - 30px)' : '100vh',
       borderLeft: '1px solid',
-      borderColor: 'whiteAlpha.200',
+      borderColor: 'var(--olv-border)',
+      boxShadow: 'var(--olv-shadow)',
     },
     drawerHeader: {
       display: 'flex',
@@ -88,15 +94,15 @@ export const settingStyles = {
       py: 4,
     },
     drawerTitle: {
-      color: 'white',
-      fontSize: 'lg',
+      color: 'var(--olv-text)',
+      fontSize: '15px',
       fontWeight: 'semibold',
     },
     closeButton: {
       position: 'absolute',
       right: 1,
       top: 1,
-      color: 'white',
+      color: 'var(--olv-muted)',
 
     },
   },
@@ -108,20 +114,22 @@ export const settingStyles = {
     },
     field: {
       label: {
-        color: 'whiteAlpha.800',
+        color: 'var(--olv-muted)',
       },
     },
     select: {
       root: {
         colorPalette: 'gray',
-        bg: 'gray.800',
+        bg: '#111111',
       },
       trigger: {
-        bg: 'gray.800',
+        bg: '#111111',
+        borderColor: 'var(--olv-border)',
       },
     },
     input: {
-      bg: 'gray.800',
+      bg: '#111111',
+      borderColor: 'var(--olv-border)',
     },
     buttonGroup: {
       gap: 4,
@@ -130,15 +138,16 @@ export const settingStyles = {
     button: {
       width: '50%',
       variant: 'outline' as const,
-      bg: 'blue',
-      color: 'white',
+      bg: '#ededed',
+      color: '#0a0a0a',
+      borderColor: '#ededed',
       _hover: {
-        bg: 'whiteAlpha.300',
+        bg: '#ffffff',
       },
     },
     fieldLabel: {
       fontSize: '14px',
-      color: 'gray.600',
+      color: 'var(--olv-muted)',
     },
   },
   common: {
@@ -147,12 +156,12 @@ export const settingStyles = {
     },
     fieldLabel: {
       fontSize: 'sm',
-      color: 'whiteAlpha.800',
+      color: 'var(--olv-muted)',
       whiteSpace: 'nowrap' as const,
     },
     switch: {
       size: 'md' as const,
-      colorPalette: 'blue' as const,
+      colorPalette: 'gray' as const,
       variant: 'solid' as const,
     },
     numberInput: {
@@ -161,10 +170,10 @@ export const settingStyles = {
         inputMode: 'decimal' as const,
       },
       input: {
-        bg: 'whiteAlpha.100',
-        borderColor: 'whiteAlpha.200',
+        bg: '#111111',
+        borderColor: 'var(--olv-border)',
         _hover: {
-          bg: 'whiteAlpha.200',
+          borderColor: 'var(--olv-border-strong)',
         },
       },
     },
@@ -174,10 +183,10 @@ export const settingStyles = {
       css: { '--field-label-width': '120px' },
     },
     input: {
-      bg: 'whiteAlpha.100',
-      borderColor: 'whiteAlpha.200',
+      bg: '#111111',
+      borderColor: 'var(--olv-border)',
       _hover: {
-        bg: 'whiteAlpha.200',
+        borderColor: 'var(--olv-border-strong)',
       },
     },
   },
@@ -186,6 +195,12 @@ export const settingStyles = {
       gap: 8,
       maxW: 'sm',
       css: { '--field-label-width': '120px' },
+    },
+    statusText: {
+      mt: -4,
+      fontSize: '12px',
+      color: 'var(--olv-muted)',
+      lineHeight: 1.5,
     },
     emotionMap: {
       title: {
@@ -196,7 +211,7 @@ export const settingStyles = {
         mb: 2,
       },
       button: {
-        colorPalette: 'blue',
+        colorPalette: 'gray',
         mt: 2,
       },
       deleteButton: {

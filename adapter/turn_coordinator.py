@@ -24,7 +24,12 @@ from .payload_builder import (
     build_force_new_message,
     build_full_text,
 )
-from .protocol import ProtocolError
+from .protocol import (
+    INBOUND_SWITCH_LIVE2D_MODEL,
+    ProtocolError,
+    SwitchLive2DModelPayload,
+    normalize_inbound_message,
+)
 from .speech_ingress import SpeechIngressService
 
 
@@ -94,6 +99,20 @@ class TurnCoordinator:
             reason_raw = message.get("reason")
             reason = reason_raw.strip() if isinstance(reason_raw, str) and reason_raw.strip() else None
             await self.finalize_turn(success=success, reason=reason)
+            return
+
+        if msg_type == INBOUND_SWITCH_LIVE2D_MODEL:
+            try:
+                inbound = normalize_inbound_message(message)
+            except ProtocolError as exc:
+                logger.warning("Invalid Live2D model switch message: %s", exc)
+                await self._send_json(build_error(str(exc)))
+                return
+            payload = inbound.payload
+            if not isinstance(payload, SwitchLive2DModelPayload):
+                await self._send_json(build_error("Invalid Live2D model switch payload."))
+                return
+            await self._handle_switch_live2d_model(payload)
             return
 
         if msg_type == "interrupt-signal":
@@ -275,6 +294,12 @@ class TurnCoordinator:
         else:
             logger.warning(log_message, *log_args)
 
+    async def send_generation_error(self, message: str) -> None:
+        await self._send_json(build_error(message or "AI response generation failed."))
+        self.session_state.reset_to_idle()
+        await self._send_json(build_force_new_message())
+        await self._send_json(build_control("conversation-chain-end"))
+
     async def _commit_inbound_message(self, message_obj) -> None:
         async with self._turn_lock:
             if self.session_state.waiting_for_playback_complete:
@@ -369,6 +394,17 @@ class TurnCoordinator:
         if message_obj is None:
             return
         await self._commit_inbound_message(message_obj)
+
+    async def _handle_switch_live2d_model(
+        self,
+        payload: SwitchLive2DModelPayload,
+    ) -> None:
+        try:
+            self.runtime_state.switch_live2d_model(payload.model_name)
+            await self._send_current_model_and_conf(force=True)
+        except Exception as exc:
+            logger.warning("Failed to switch Live2D model: %s", exc)
+            await self._send_json(build_error(str(exc)))
 
     async def _handle_interrupt_signal(self) -> None:
         umo = self._build_current_unified_msg_origin()

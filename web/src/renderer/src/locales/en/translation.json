@@ -33,6 +33,9 @@
       "imageMaxWidthHelp": "Maximum width for image resizing. Images exceeding this width will be proportionally scaled down. Set to 0 for no size limit. This feature exists because some AI models may have limitations when processing very large images. However, most AI models can handle images automatically, so the default is 0 (no restriction) to preserve your original images."
     },
     "live2d": {
+      "model": "Model",
+      "selectModel": "Select a model",
+      "modelListError": "Unable to read live2ds/model_dict.json",
       "pointerInteractive": "Pointer Interactive",
       "scrollToResize": "Enable Scroll to Resize"
     },

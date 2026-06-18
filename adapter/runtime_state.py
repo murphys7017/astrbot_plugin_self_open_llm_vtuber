@@ -15,6 +15,7 @@ from .client_profile import (
 )
 from .model_info import DEFAULT_LIVE2D_MODEL_NAME, parse_model_info
 from .payload_builder import build_set_model_and_conf
+from .plugin_runtime import update_plugin_config_value
 
 
 class RuntimeState:
@@ -191,6 +192,32 @@ class RuntimeState:
 
         return vad_changed
 
+    def switch_live2d_model(self, model_name: str) -> dict[str, Any]:
+        normalized_model_name = model_name.strip() if isinstance(model_name, str) else ""
+        if not normalized_model_name:
+            raise ValueError("`switch-live2d-model` requires a non-empty `model_name`.")
+
+        next_model_info = parse_model_info(
+            self._config_get(self.platform_config, "model_info_json", "{}"),
+            host=self.host,
+            http_port=self.http_port,
+            live2ds_dir=self.live2ds_dir,
+            selected_model_name=normalized_model_name,
+        )
+        update_plugin_config_value(
+            "live2d_model_name",
+            normalized_model_name,
+        )
+        self._set_plugin_config_value("live2d_model_name", normalized_model_name)
+        self.live2d_model_name = normalized_model_name
+        self.model_info = next_model_info
+        logger.info(
+            "Switched Live2D model from WebUI (live2d_model_name=%s, model_url=%s)",
+            self.live2d_model_name,
+            self.model_info.get("url", "<missing>"),
+        )
+        return self.model_info
+
     def load_selected_providers(self) -> None:
         if self.plugin_context is None:
             logger.warning(
@@ -294,6 +321,37 @@ class RuntimeState:
                 f"Invalid plugin config in `{config_path}`: expected a JSON object."
             )
         return data
+
+    def _set_plugin_config_value(self, key: str, value: Any) -> None:
+        if self.plugin_config is None:
+            self.plugin_config = {key: value}
+            return
+
+        try:
+            if hasattr(self.plugin_config, "__setitem__"):
+                self.plugin_config[key] = value
+                return
+            if hasattr(self.plugin_config, key):
+                setattr(self.plugin_config, key, value)
+                return
+        except Exception as exc:
+            logger.warning(
+                "Failed to update runtime plugin config value `%s`: %s",
+                key,
+                exc,
+            )
+
+        config_payload = self._clone_plugin_config(self.plugin_config)
+        if isinstance(config_payload, dict):
+            config_payload[key] = value
+            self.plugin_config = config_payload
+            return
+
+        logger.debug(
+            "Runtime plugin config object `%s` has no writable `%s` field.",
+            type(self.plugin_config).__name__,
+            key,
+        )
 
 
 def _plugin_config_get(config: Any, key: str, default: Any) -> Any:

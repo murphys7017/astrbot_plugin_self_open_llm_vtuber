@@ -106,7 +106,7 @@ function ASR({ onSave, onCancel }: ASRProps): JSX.Element {
 
       {microphoneCollection.items.length === 0 && (
         <Stack gap={2}>
-          <Text fontSize="sm" color="whiteAlpha.700">
+          <Text fontSize="13px" color="var(--olv-muted)">
             {t('settings.asr.microphonePermissionHelp')}
           </Text>
           <Stack direction="row" gap={2}>

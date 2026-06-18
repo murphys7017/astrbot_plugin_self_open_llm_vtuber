@@ -12,6 +12,7 @@ The script expects Node.js (>= 18) and npm to be available on PATH.
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,14 @@ PLUGIN_DIR = Path(__file__).resolve().parent
 WEB_SRC_DIR = PLUGIN_DIR / "web"
 WEBUI_OUT_DIR = PLUGIN_DIR / "webui"
 WEB_BUILD_DIR = WEB_SRC_DIR / "dist" / "web"
+
+
+def _cmd(name: str) -> str:
+    if os.name == "nt":
+        resolved = shutil.which(f"{name}.cmd") or shutil.which(name)
+        if resolved:
+            return resolved
+    return name
 
 
 def _run(cmd: list[str], cwd: Path) -> None:
@@ -47,11 +56,11 @@ def main() -> None:
     # Step 1: Install dependencies
     if not args.skip_install:
         print("\n=== Installing npm dependencies ===")
-        _run(["npm", "install"], cwd=WEB_SRC_DIR)
+        _run([_cmd("npm"), "install"], cwd=WEB_SRC_DIR)
 
     # Step 2: Build the web target
     print("\n=== Building WebUI (web target) ===")
-    _run(["npm", "run", "build:web"], cwd=WEB_SRC_DIR)
+    _run([_cmd("npm"), "run", "build:web"], cwd=WEB_SRC_DIR)
 
     if not WEB_BUILD_DIR.exists():
         print(f"ERROR: build output not found at {WEB_BUILD_DIR}", file=sys.stderr)

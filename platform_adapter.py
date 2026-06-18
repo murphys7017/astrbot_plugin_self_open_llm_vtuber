@@ -47,6 +47,7 @@ IMAGE_CACHE_DIR = RUNTIME_CACHE_DIR / "images"
 @register_platform_adapter(
     "olv_pet_adapter",
     "Desktop VTuber Adapter",
+    support_streaming_message=False,
     default_config_tmpl={
         "host": "127.0.0.1",
         "port": 12396,
@@ -177,6 +178,7 @@ class OLVPetPlatformAdapter(Platform):
             name="olv_pet_adapter",
             description="Desktop VTuber Adapter",
             id="olv_pet_adapter",
+            support_streaming_message=False,
         )
 
     @property

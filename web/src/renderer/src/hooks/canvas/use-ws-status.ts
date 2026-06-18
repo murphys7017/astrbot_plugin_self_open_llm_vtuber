@@ -21,21 +21,21 @@ export const useWSStatus = () => {
     switch (wsState) {
       case 'OPEN':
         return {
-          color: 'green.500',
+          color: 'var(--olv-success)',
           textKey: 'wsStatus.connected',
           isDisconnected: false,
           handleClick,
         };
       case 'CONNECTING':
         return {
-          color: 'yellow.500',
+          color: 'var(--olv-warning)',
           textKey: 'wsStatus.connecting',
           isDisconnected: false,
           handleClick,
         };
       default:
         return {
-          color: 'red.500',
+          color: 'var(--olv-danger)',
           textKey: 'wsStatus.clickToReconnect',
           isDisconnected: true,
           handleClick,
