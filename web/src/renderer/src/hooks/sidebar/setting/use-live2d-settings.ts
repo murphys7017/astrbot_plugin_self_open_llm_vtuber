@@ -1,6 +1,6 @@
 import { createListCollection } from '@chakra-ui/react';
 import {
-  useState, useEffect, useMemo, useCallback,
+  useState, useEffect, useMemo, useCallback, useRef,
 } from 'react';
 import { ModelInfo, useLive2DConfig } from '@/context/live2d-config-context';
 import { useWebSocket } from '@/context/websocket-context';
@@ -35,10 +35,16 @@ export const useLive2dSettings = () => {
   const [originalModelInfo, setOriginalModelInfo] = useState<ModelInfo>(
     Live2DConfigContext?.modelInfo || initialModelInfo,
   );
+  const [modelName, setModelName] = useState<string | null>(
+    Live2DConfigContext?.modelInfo?.name ?? null,
+  );
   const [modelOptions, setModelOptions] = useState<Live2DModelOption[]>([]);
   const [modelListStatus, setModelListStatus] = useState<'loading' | 'ready' | 'error'>('loading');
-  const [selectedModelName, setSelectedModelNameState] = useState<string[]>(
-    Live2DConfigContext?.modelInfo?.name ? [Live2DConfigContext.modelInfo.name] : [],
+  const lastSentModelNameRef = useRef<string | null>(modelName);
+
+  const selectedModelName = useMemo(
+    () => (modelName ? [modelName] : []),
+    [modelName],
   );
 
   const modelCollection = useMemo(() => createListCollection({
@@ -55,7 +61,9 @@ export const useLive2dSettings = () => {
         setModelInfoState(Live2DConfigContext.modelInfo);
       }
       if (Live2DConfigContext.modelInfo.name) {
-        setSelectedModelNameState([Live2DConfigContext.modelInfo.name]);
+        const nextModelName = Live2DConfigContext.modelInfo.name;
+        setModelName(nextModelName);
+        lastSentModelNameRef.current = nextModelName;
       }
     }
   }, [Live2DConfigContext?.modelInfo]);
@@ -110,21 +118,34 @@ export const useLive2dSettings = () => {
     }
   }, [modelInfo.pointerInteractive, modelInfo.scrollToResize]);
 
-  const handleInputChange = useCallback((key: keyof ModelInfo, value: ModelInfo[keyof ModelInfo]): void => {
-    setModelInfoState((prev) => ({ ...prev, [key]: value }));
-  }, []);
-
-  const setSelectedModelName = useCallback((value: string[]): void => {
-    const modelName = value[0] ?? '';
-    setSelectedModelNameState(modelName ? [modelName] : []);
+  useEffect(() => {
     if (!modelName) {
+      return;
+    }
+    setModelInfoState((prev) => (
+      prev.name === modelName ? prev : { ...prev, name: modelName }
+    ));
+  }, [modelName]);
+
+  useEffect(() => {
+    if (!modelName || modelName === lastSentModelNameRef.current) {
       return;
     }
     sendMessage({
       type: 'switch-live2d-model',
       model_name: modelName,
     });
-  }, [sendMessage]);
+    lastSentModelNameRef.current = modelName;
+  }, [modelName, sendMessage]);
+
+  const handleInputChange = useCallback((key: keyof ModelInfo, value: ModelInfo[keyof ModelInfo]): void => {
+    setModelInfoState((prev) => ({ ...prev, [key]: value }));
+  }, []);
+
+  const setSelectedModelName = useCallback((value: string[]): void => {
+    const nextModelName = value[0]?.trim() || null;
+    setModelName(nextModelName);
+  }, []);
 
   const handleSave = useCallback((): void => {
     if (Live2DConfigContext && modelInfo) {
@@ -137,15 +158,8 @@ export const useLive2dSettings = () => {
     if (Live2DConfigContext && originalModelInfo) {
       Live2DConfigContext.setModelInfo(originalModelInfo);
     }
-    const originalModelName = originalModelInfo.name ?? '';
-    setSelectedModelNameState(originalModelName ? [originalModelName] : []);
-    if (originalModelName && originalModelName !== selectedModelName[0]) {
-      sendMessage({
-        type: 'switch-live2d-model',
-        model_name: originalModelName,
-      });
-    }
-  }, [Live2DConfigContext, originalModelInfo, selectedModelName, sendMessage]);
+    setModelName(originalModelInfo.name ?? null);
+  }, [Live2DConfigContext, originalModelInfo]);
 
   return {
     modelInfo,

@@ -24,7 +24,12 @@ from .payload_builder import (
     build_force_new_message,
     build_full_text,
 )
-from .protocol import ProtocolError
+from .protocol import (
+    INBOUND_SWITCH_LIVE2D_MODEL,
+    ProtocolError,
+    SwitchLive2DModelPayload,
+    normalize_inbound_message,
+)
 from .speech_ingress import SpeechIngressService
 
 
@@ -96,8 +101,18 @@ class TurnCoordinator:
             await self.finalize_turn(success=success, reason=reason)
             return
 
-        if msg_type == "switch-live2d-model":
-            await self._handle_switch_live2d_model(message)
+        if msg_type == INBOUND_SWITCH_LIVE2D_MODEL:
+            try:
+                inbound = normalize_inbound_message(message)
+            except ProtocolError as exc:
+                logger.warning("Invalid Live2D model switch message: %s", exc)
+                await self._send_json(build_error(str(exc)))
+                return
+            payload = inbound.payload
+            if not isinstance(payload, SwitchLive2DModelPayload):
+                await self._send_json(build_error("Invalid Live2D model switch payload."))
+                return
+            await self._handle_switch_live2d_model(payload)
             return
 
         if msg_type == "interrupt-signal":
@@ -380,12 +395,12 @@ class TurnCoordinator:
             return
         await self._commit_inbound_message(message_obj)
 
-    async def _handle_switch_live2d_model(self, message: dict[str, Any]) -> None:
-        model_name = message.get("model_name")
+    async def _handle_switch_live2d_model(
+        self,
+        payload: SwitchLive2DModelPayload,
+    ) -> None:
         try:
-            if not isinstance(model_name, str) or not model_name.strip():
-                raise ValueError("`switch-live2d-model` requires non-empty `model_name`.")
-            self.runtime_state.switch_live2d_model(model_name)
+            self.runtime_state.switch_live2d_model(payload.model_name)
             await self._send_current_model_and_conf(force=True)
         except Exception as exc:
             logger.warning("Failed to switch Live2D model: %s", exc)

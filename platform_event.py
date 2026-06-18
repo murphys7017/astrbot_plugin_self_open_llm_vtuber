@@ -41,11 +41,8 @@ class OLVPetPlatformEvent(AstrMessageEvent):
                     buffer.chain.extend(chain.chain or [])
         except Exception as exc:
             await self.adapter.turn_coordinator.send_generation_error(str(exc))
-            await super().send_streaming(generator, use_fallback)
             return
 
         if buffer and buffer.chain:
             buffer.squash_plain()
             await self.send(buffer)
-
-        await super().send_streaming(generator, use_fallback)

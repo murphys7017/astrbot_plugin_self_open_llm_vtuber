@@ -122,7 +122,22 @@ function ChatHistoryPanel(): JSX.Element {
                             onError={(e) => {
                               const target = e.target as HTMLImageElement;
                               const fallbackName = msg.name || confName || 'A';
-                              target.outerHTML = `<div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; border-radius: 50%; background-color: #111111; border: 1px solid var(--olv-border-strong); color: var(--olv-text); font-size: 12px; font-weight: 600;">${fallbackName[0].toUpperCase()}</div>`;
+                              const fallbackAvatar = document.createElement('div');
+                              fallbackAvatar.textContent = fallbackName[0].toUpperCase();
+                              Object.assign(fallbackAvatar.style, {
+                                width: '100%',
+                                height: '100%',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                borderRadius: '50%',
+                                backgroundColor: '#111111',
+                                border: '1px solid var(--olv-border-strong)',
+                                color: 'var(--olv-text)',
+                                fontSize: '12px',
+                                fontWeight: '600',
+                              });
+                              target.replaceWith(fallbackAvatar);
                             }}
                           />
                         ) : (
