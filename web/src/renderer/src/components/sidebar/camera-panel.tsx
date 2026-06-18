@@ -11,9 +11,9 @@ function LiveIndicator() {
   const { t } = useTranslation();
 
   return (
-    <Box color="red.500" display="flex" alignItems="center" gap={2}>
-      <Box w="8px" h="8px" borderRadius="full" bg="red.500" animation="pulse 2s infinite" />
-      <Text fontSize="sm">{t('sidebar.live')}</Text>
+    <Box color="var(--olv-danger)" display="flex" alignItems="center" gap={2}>
+      <Box w="7px" h="7px" borderRadius="full" bg="var(--olv-danger)" animation="pulse 2s infinite" />
+      <Text fontSize="12px" fontWeight="600">{t('sidebar.live')}</Text>
     </Box>
   );
 }
@@ -30,7 +30,7 @@ function CameraPlaceholder() {
       gap={2}
     >
       <FiCamera size={24} />
-      <Text color="whiteAlpha.600" fontSize="sm" textAlign="center">
+      <Text color="var(--olv-muted)" fontSize="13px" textAlign="center">
         {t('footer.cameraControl')}
       </Text>
     </Box>
@@ -95,11 +95,11 @@ function CameraPanel(): JSX.Element {
           cursor="pointer"
           position="relative"
           _hover={{
-            bg: 'whiteAlpha.100',
+            bg: 'rgba(255,255,255,0.05)',
           }}
         >
           {error ? (
-            <Text color="red.300" fontSize="sm" textAlign="center">
+            <Text color="var(--olv-danger)" fontSize="13px" textAlign="center">
               {error}
             </Text>
           ) : (

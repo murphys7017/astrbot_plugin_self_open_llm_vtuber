@@ -11,15 +11,15 @@ function ScreenIndicator() {
   const { t } = useTranslation();
   
   return (
-    <Box color="red.500" display="flex" alignItems="center" gap={2}>
+    <Box color="var(--olv-danger)" display="flex" alignItems="center" gap={2}>
       <Box
-        w="8px"
-        h="8px"
+        w="7px"
+        h="7px"
         borderRadius="full"
-        bg="red.500"
+        bg="var(--olv-danger)"
         animation="pulse 2s infinite"
       />
-      <Text fontSize="sm">{t('sidebar.screen')}</Text>
+      <Text fontSize="12px" fontWeight="600">{t('sidebar.screen')}</Text>
     </Box>
   );
 }
@@ -36,7 +36,7 @@ function ScreenPlaceholder() {
       gap={2}
     >
       <FiMonitor size={24} />
-      <Text color="whiteAlpha.600" fontSize="sm" textAlign="center">
+      <Text color="var(--olv-muted)" fontSize="13px" textAlign="center">
         {t('footer.screenControl')}
       </Text>
     </Box>
@@ -97,11 +97,11 @@ function ScreenPanel(): JSX.Element {
           cursor="pointer"
           position="relative"
           _hover={{
-            bg: "whiteAlpha.100",
+            bg: "rgba(255,255,255,0.05)",
           }}
         >
           {error ? (
-            <Text color="red.300" fontSize="sm" textAlign="center">
+            <Text color="var(--olv-danger)" fontSize="13px" textAlign="center">
               {error}
             </Text>
           ) : (

@@ -34,7 +34,7 @@ function ChatHistoryPanel(): JSX.Element {
     <Box
       h="full"
       overflow="hidden"
-      bg="gray.900"
+      bg="transparent"
     >
       <Global styles={chatPanelStyles} />
       <MainContainer>
@@ -46,8 +46,10 @@ function ChatHistoryPanel(): JSX.Element {
                 alignItems="center"
                 justifyContent="center"
                 height="100%"
-                color="whiteAlpha.500"
-                fontSize="sm"
+                color="var(--olv-muted)"
+                fontSize="13px"
+                border="1px dashed var(--olv-border)"
+                borderRadius="8px"
               >
                 {t('sidebar.noMessages')}
               </Box>
@@ -120,7 +122,7 @@ function ChatHistoryPanel(): JSX.Element {
                             onError={(e) => {
                               const target = e.target as HTMLImageElement;
                               const fallbackName = msg.name || confName || 'A';
-                              target.outerHTML = `<div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; border-radius: 50%; background-color: var(--chakra-colors-blue-500); color: white; font-size: 14px;">${fallbackName[0].toUpperCase()}</div>`;
+                              target.outerHTML = `<div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; border-radius: 50%; background-color: #111111; border: 1px solid var(--olv-border-strong); color: var(--olv-text); font-size: 12px; font-weight: 600;">${fallbackName[0].toUpperCase()}</div>`;
                             }}
                           />
                         ) : (

@@ -1,4 +1,4 @@
-import { Box } from '@chakra-ui/react';
+import { Box, HStack } from '@chakra-ui/react';
 import React, { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { canvasStyles } from './canvas-styles';
@@ -25,14 +25,23 @@ const WebSocketStatus = memo((): JSX.Element => {
   return (
     <Box
       {...canvasStyles.wsStatus.container}
-      backgroundColor={color}
+      backgroundColor="rgba(10, 10, 10, 0.78)"
       onClick={handleClick}
       cursor={isDisconnected ? 'pointer' : 'default'}
       _hover={{
-        opacity: isDisconnected ? 0.8 : 1,
+        borderColor: isDisconnected ? 'var(--olv-border-strong)' : 'var(--olv-border)',
       }}
     >
-      <MemoizedStatusContent textKey={textKey} />
+      <HStack gap="2">
+        <Box
+          width="7px"
+          height="7px"
+          borderRadius="999px"
+          backgroundColor={color}
+          boxShadow={`0 0 0 3px color-mix(in srgb, ${color} 20%, transparent)`}
+        />
+        <MemoizedStatusContent textKey={textKey} />
+      </HStack>
     </Box>
   );
 });

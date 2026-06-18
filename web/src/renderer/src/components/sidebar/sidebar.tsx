@@ -48,13 +48,18 @@ const ModeMenu = memo(({ setMode, currentMode, isElectron }: {
   isElectron: boolean
 }) => (
   <Menu.Root>
-    <Menu.Trigger as={Button} aria-label="Mode Menu" title="Change Mode">
+    <Menu.Trigger
+      as={Button}
+      aria-label="Mode Menu"
+      title="Change Mode"
+      {...sidebarStyles.sidebar.headerButton}
+    >
       <FiLayers />
     </Menu.Trigger>
     <Menu.Positioner>
-      <Menu.Content>
+      <Menu.Content {...sidebarStyles.sidebar.menuContent}>
         <Menu.RadioItemGroup value={currentMode}>
-          <Menu.RadioItem value="window" onClick={() => setMode('window')}>
+          <Menu.RadioItem value="window" onClick={() => setMode('window')} {...sidebarStyles.sidebar.menuItem}>
             <Menu.ItemIndicator />
             Live Mode
           </Menu.RadioItem>
@@ -67,6 +72,7 @@ const ModeMenu = memo(({ setMode, currentMode, isElectron }: {
             }}
             disabled={!isElectron}
             title={!isElectron ? "Pet mode is only available in desktop app" : undefined}
+            {...sidebarStyles.sidebar.menuItem}
           >
             <Menu.ItemIndicator />
             Pet Mode
@@ -81,7 +87,7 @@ ModeMenu.displayName = 'ModeMenu';
 
 const HeaderButtons = memo(({ onSettingsOpen, setMode, currentMode, isElectron }: HeaderButtonsProps) => (
   <Box display="flex" gap={1}>
-    <Button onClick={onSettingsOpen}>
+    <Button onClick={onSettingsOpen} aria-label="Settings" title="Settings" {...sidebarStyles.sidebar.headerButton}>
       <FiSettings />
     </Button>
 

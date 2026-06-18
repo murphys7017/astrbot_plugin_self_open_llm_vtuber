@@ -56,6 +56,65 @@ def get_plugin_config() -> Any:
         return deepcopy(_plugin_config)
 
 
+def update_plugin_config_value(key: str, value: Any) -> dict[str, Any]:
+    global _plugin_config
+    global _plugin_config_path
+
+    with _state_lock:
+        config_payload = _coerce_config_to_dict(_plugin_config)
+        config_payload[key] = value
+
+        if _plugin_config is not None:
+            try:
+                _plugin_config[key] = value
+                save_config = getattr(_plugin_config, "save_config", None)
+                if callable(save_config):
+                    save_config()
+            except Exception as exc:
+                logger.warning(
+                    "Failed to update in-memory plugin config value `%s`: %s",
+                    key,
+                    exc,
+                )
+
+        target_path = _plugin_config_path or _default_plugin_config_path
+        try:
+            disk_config = _load_plugin_config_from_disk(
+                target_path,
+                source_label="plugin config",
+            )
+            if disk_config is not None:
+                config_payload.update(disk_config)
+                config_payload[key] = value
+
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            with open(target_path, "w", encoding="utf-8") as f:
+                json.dump(config_payload, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+            _plugin_config_path = target_path
+        except Exception as exc:
+            logger.warning(
+                "Failed to persist plugin config value `%s` to `%s`: %s",
+                key,
+                target_path,
+                exc,
+            )
+
+        _plugin_config = deepcopy(config_payload)
+        return deepcopy(config_payload)
+
+
+def _coerce_config_to_dict(config: Any) -> dict[str, Any]:
+    if config is None:
+        return {}
+    if isinstance(config, dict):
+        return deepcopy(config)
+    try:
+        return dict(config)
+    except Exception:
+        return {}
+
+
 def _load_plugin_config_from_disk(
     config_path: str | None,
     *,

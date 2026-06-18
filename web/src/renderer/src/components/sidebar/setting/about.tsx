@@ -37,7 +37,7 @@ function About(): JSX.Element {
         <Text fontWeight="bold" mb={0}>{t('Author')}</Text>
         <Text>{appAuthor}</Text>
       </Box> */}
-      <Box borderTop="1px solid" borderColor="whiteAlpha.200" pt={2} mt={1} />
+      <Box borderTop="1px solid" borderColor="var(--olv-border)" pt={2} mt={1} />
       <Box mt={1}>
         <Text fontWeight="bold" mb={1}>
           {t("settings.about.projectLinks")}
@@ -61,9 +61,16 @@ function About(): JSX.Element {
           </Button>
         </HStack>
       </Box>
-      <Box borderTop="1px solid" borderColor="whiteAlpha.200" pt={2} mt={1} />
+      <Box borderTop="1px solid" borderColor="var(--olv-border)" pt={2} mt={1} />
       <Box mt={1}>
-        <Button size="xs" colorPalette="blue" onClick={() => openExternalLink("https://github.com/Open-LLM-VTuber/Open-LLM-VTuber-Web/blob/main/LICENSE")}>
+        <Button
+          size="xs"
+          bg="transparent"
+          color="var(--olv-muted)"
+          border="1px solid var(--olv-border)"
+          _hover={{ bg: 'rgba(255,255,255,0.06)', color: 'var(--olv-text)' }}
+          onClick={() => openExternalLink("https://github.com/Open-LLM-VTuber/Open-LLM-VTuber-Web/blob/main/LICENSE")}
+        >
           {t("settings.about.viewLicense")}
         </Button>
       </Box>

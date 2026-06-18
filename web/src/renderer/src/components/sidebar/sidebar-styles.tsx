@@ -3,28 +3,31 @@ import { css } from '@emotion/react';
 const commonStyles = {
   scrollbar: {
     '&::-webkit-scrollbar': {
-      width: '4px',
+      width: '6px',
     },
     '&::-webkit-scrollbar-track': {
-      bg: 'whiteAlpha.100',
-      borderRadius: 'full',
+      background: 'transparent',
     },
     '&::-webkit-scrollbar-thumb': {
-      bg: 'whiteAlpha.300',
-      borderRadius: 'full',
+      background: 'rgba(255,255,255,0.18)',
+      borderRadius: '999px',
+      border: '2px solid transparent',
+      backgroundClip: 'content-box',
     },
   },
   panel: {
     border: '1px solid',
-    borderColor: 'whiteAlpha.200',
-    borderRadius: 'lg',
-    bg: 'blackAlpha.400',
+    borderColor: 'var(--olv-border)',
+    borderRadius: '8px',
+    bg: 'var(--olv-panel-soft)',
   },
   title: {
-    fontSize: 'lg',
-    fontWeight: 'semibold',
-    color: 'white',
-    mb: 4,
+    fontSize: '12px',
+    fontWeight: '600',
+    color: 'var(--olv-muted)',
+    mb: 3,
+    textTransform: 'uppercase',
+    letterSpacing: '0',
   },
 };
 
@@ -36,16 +39,20 @@ export const sidebarStyles = {
       top: 0,
       height: '100%',
       width: '440px',
-      bg: 'gray.900',
+      bg: 'rgba(10, 10, 10, 0.96)',
       transform: isCollapsed
         ? 'translateX(calc(-100% + 24px))'
         : 'translateX(0)',
       transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
       display: 'flex',
       flexDirection: 'column' as const,
-      gap: 4,
+      gap: 3,
       overflow: isCollapsed ? 'visible' : 'hidden',
-      pb: '4',
+      pb: '3',
+      borderRight: '1px solid',
+      borderColor: 'var(--olv-border)',
+      boxShadow: isCollapsed ? 'none' : 'var(--olv-shadow)',
+      backdropFilter: 'blur(18px)',
     }),
     toggleButton: {
       position: 'absolute',
@@ -57,9 +64,11 @@ export const sidebarStyles = {
       alignItems: 'center',
       justifyContent: 'center',
       cursor: 'pointer',
-      color: 'whiteAlpha.700',
-      _hover: { color: 'white' },
-      bg: 'transparent',
+      color: 'var(--olv-muted)',
+      _hover: { color: 'var(--olv-text)', bg: 'rgba(255,255,255,0.06)' },
+      bg: 'rgba(10, 10, 10, 0.72)',
+      borderLeft: '1px solid',
+      borderColor: 'var(--olv-border)',
       transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
       zIndex: 1,
     },
@@ -75,8 +84,52 @@ export const sidebarStyles = {
       width: '100%',
       display: 'flex',
       alignItems: 'center',
+      justifyContent: 'space-between',
       gap: 1,
-      p: 2,
+      px: 4,
+      py: 3,
+      borderBottom: '1px solid',
+      borderColor: 'var(--olv-border)',
+    },
+    headerButton: {
+      width: '36px',
+      height: '36px',
+      minW: '36px',
+      p: 0,
+      borderRadius: '8px',
+      bg: 'transparent',
+      color: 'var(--olv-muted)',
+      border: '1px solid',
+      borderColor: 'transparent',
+      _hover: {
+        bg: 'rgba(255,255,255,0.06)',
+        borderColor: 'var(--olv-border)',
+        color: 'var(--olv-text)',
+      },
+      _active: {
+        bg: 'rgba(255,255,255,0.1)',
+      },
+    },
+    menuContent: {
+      bg: '#111111',
+      color: 'var(--olv-text)',
+      border: '1px solid',
+      borderColor: 'var(--olv-border)',
+      borderRadius: '8px',
+      boxShadow: '0 18px 48px rgba(0,0,0,0.36)',
+      p: 1,
+    },
+    menuItem: {
+      borderRadius: '6px',
+      fontSize: '13px',
+      color: 'var(--olv-muted)',
+      _hover: {
+        bg: 'rgba(255,255,255,0.06)',
+        color: 'var(--olv-text)',
+      },
+      _checked: {
+        color: 'var(--olv-text)',
+      },
     },
   },
 
@@ -84,15 +137,15 @@ export const sidebarStyles = {
     container: {
       flex: 1,
       overflow: 'hidden',
-      px: 4,
+      px: 3,
       display: 'flex',
       flexDirection: 'column',
     },
     title: commonStyles.title,
     messageList: {
       ...commonStyles.panel,
-      p: 4,
-      width: '97%',
+      p: 0,
+      width: '100%',
       flex: 1,
       overflowY: 'auto',
       css: {
@@ -124,9 +177,9 @@ export const sidebarStyles = {
     },
     entry: {
       p: 2,
-      borderRadius: 'md',
+      borderRadius: '8px',
       _hover: {
-        bg: 'whiteAlpha.50',
+        bg: 'rgba(255,255,255,0.05)',
       },
     },
   },
@@ -136,11 +189,11 @@ export const sidebarStyles = {
       display: 'flex',
       position: 'relative',
       _hover: {
-        bg: 'whiteAlpha.50',
+        bg: 'rgba(255,255,255,0.05)',
       },
       py: 1,
       px: 2,
-      borderRadius: 'md',
+      borderRadius: '8px',
     },
     message: {
       maxW: '90%',
@@ -149,7 +202,7 @@ export const sidebarStyles = {
     },
     text: {
       fontSize: 'xs',
-      color: 'whiteAlpha.900',
+      color: 'var(--olv-text)',
     },
     dot: {
       position: 'absolute',
@@ -254,7 +307,7 @@ export const sidebarStyles = {
       transition: 'all 0.2s',
       cursor: 'pointer',
       _hover: {
-        bg: 'whiteAlpha.100',
+        bg: 'rgba(255,255,255,0.05)',
       },
     },
     iframe: {
@@ -274,29 +327,36 @@ export const sidebarStyles = {
     },
     tabs: {
       width: '100%',
-      bg: 'whiteAlpha.50',
-      borderRadius: 'lg',
+      bg: 'var(--olv-panel-soft)',
+      borderRadius: '8px',
       p: '1',
     },
     list: {
       borderBottom: 'none',
-      gap: '2',
+      gap: '1',
+      p: '1',
+      bg: 'var(--olv-panel-soft)',
+      border: '1px solid',
+      borderColor: 'var(--olv-border)',
+      borderRadius: '8px',
     },
     trigger: {
-      color: 'whiteAlpha.700',
+      color: 'var(--olv-muted)',
       display: 'flex',
       alignItems: 'center',
       gap: 2,
       px: 3,
       py: 2,
-      borderRadius: 'md',
+      borderRadius: '6px',
+      fontSize: '12px',
+      fontWeight: '500',
       _hover: {
-        color: 'white',
-        bg: 'whiteAlpha.50',
+        color: 'var(--olv-text)',
+        bg: 'rgba(255,255,255,0.06)',
       },
       _selected: {
-        color: 'white',
-        bg: 'whiteAlpha.200',
+        color: 'var(--olv-bg)',
+        bg: 'var(--olv-text)',
       },
     },
   },
@@ -314,21 +374,20 @@ export const sidebarStyles = {
       justifyContent: 'center', // Center items horizontally
     },
     icon: {
-      color: 'blue.300',
+      color: 'var(--olv-muted)',
       boxSize: '14px',
     },
     text: {
       fontSize: 'xs',
-      color: 'whiteAlpha.700',
-      fontStyle: 'italic',
+      color: 'var(--olv-muted)',
     },
     spinner: {
       size: 'xs',
-      color: 'blue.300',
+      color: 'var(--olv-muted)',
       ml: 0,
     },
     completedIcon: {
-      color: 'green.300',
+      color: 'var(--olv-success)',
       boxSize: '14px',
       ml: 0,
     },
@@ -342,23 +401,24 @@ export const sidebarStyles = {
 
 export const chatPanelStyles = css`
   .cs-message-list {
-    background: var(--chakra-colors-gray-900) !important;
-    padding: var(--chakra-space-4);
+    background: transparent !important;
+    padding: 14px 12px !important;
   }
   
   .cs-message {
-    margin: 12px 0;
-    // padding-top: 20px !important;
+    margin: 10px 0 !important;
   }
 
   .cs-message__content {
-    background-color: var(--chakra-colors-gray-700) !important;
-    border-radius: var(--chakra-radii-md);
-    padding: 8px !important;
-    color: var(--chakra-colors-white) !important;
-    font-size: 0.95rem !important;
-    line-height: 1.5 !important;
+    background: rgba(255, 255, 255, 0.045) !important;
+    border: 1px solid var(--olv-border) !important;
+    border-radius: 8px !important;
+    padding: 10px 12px !important;
+    color: var(--olv-text) !important;
+    font-size: 13px !important;
+    line-height: 1.55 !important;
     margin-top: 4px !important;
+    box-shadow: none !important;
   }
 
   .cs-message__text {
@@ -366,14 +426,16 @@ export const chatPanelStyles = css`
   }
 
   .cs-message--outgoing .cs-message__content {
-    background-color: var(--chakra-colors-gray-600) !important;
+    background: #ededed !important;
+    border-color: #ededed !important;
+    color: #0a0a0a !important;
   }
 
   .cs-chat-container {
     background: transparent !important;
-    border: 1px solid var(--chakra-colors-whiteAlpha-200);
-    border-radius: var(--chakra-radii-lg);
-    padding: var(--chakra-space-2);
+    border: 1px solid var(--olv-border) !important;
+    border-radius: 8px !important;
+    padding: 0 !important;
   }
 
   .cs-main-container {
@@ -387,9 +449,9 @@ export const chatPanelStyles = css`
     position: absolute !important;
     top: 0 !important;
     left: 36px !important;
-    font-size: 0.875rem !important;
+    font-size: 11px !important;
     font-weight: 600 !important;
-    color: var(--chakra-colors-whiteAlpha-900) !important;
+    color: var(--olv-muted) !important;
   }
 
   .cs-message__content-wrapper {
@@ -398,11 +460,13 @@ export const chatPanelStyles = css`
   }
 
   .cs-avatar {
-    background-color: var(--chakra-colors-blue-500) !important;
-    color: white !important;
+    background-color: #111111 !important;
+    border: 1px solid var(--olv-border-strong) !important;
+    color: var(--olv-text) !important;
     width: 28px !important;
     height: 28px !important;
-    font-size: 14px !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
@@ -410,7 +474,9 @@ export const chatPanelStyles = css`
   }
 
   .cs-message--outgoing .cs-avatar {
-    background-color: var(--chakra-colors-green-500) !important;
+    background-color: #ededed !important;
+    color: #0a0a0a !important;
+    border-color: #ededed !important;
   }
 
   .cs-message__header {

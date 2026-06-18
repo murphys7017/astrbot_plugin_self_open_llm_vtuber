@@ -96,6 +96,10 @@ class TurnCoordinator:
             await self.finalize_turn(success=success, reason=reason)
             return
 
+        if msg_type == "switch-live2d-model":
+            await self._handle_switch_live2d_model(message)
+            return
+
         if msg_type == "interrupt-signal":
             await self._handle_interrupt_signal()
             return
@@ -275,6 +279,12 @@ class TurnCoordinator:
         else:
             logger.warning(log_message, *log_args)
 
+    async def send_generation_error(self, message: str) -> None:
+        await self._send_json(build_error(message or "AI response generation failed."))
+        self.session_state.reset_to_idle()
+        await self._send_json(build_force_new_message())
+        await self._send_json(build_control("conversation-chain-end"))
+
     async def _commit_inbound_message(self, message_obj) -> None:
         async with self._turn_lock:
             if self.session_state.waiting_for_playback_complete:
@@ -369,6 +379,17 @@ class TurnCoordinator:
         if message_obj is None:
             return
         await self._commit_inbound_message(message_obj)
+
+    async def _handle_switch_live2d_model(self, message: dict[str, Any]) -> None:
+        model_name = message.get("model_name")
+        try:
+            if not isinstance(model_name, str) or not model_name.strip():
+                raise ValueError("`switch-live2d-model` requires non-empty `model_name`.")
+            self.runtime_state.switch_live2d_model(model_name)
+            await self._send_current_model_and_conf(force=True)
+        except Exception as exc:
+            logger.warning("Failed to switch Live2D model: %s", exc)
+            await self._send_json(build_error(str(exc)))
 
     async def _handle_interrupt_signal(self) -> None:
         umo = self._build_current_unified_msg_origin()
