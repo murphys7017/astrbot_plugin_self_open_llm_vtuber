@@ -149,13 +149,17 @@ def build_static_routes(
     live2ds_dir: Path,
     olv_dir: Path,
     runtime_cache_dir: Path,
+    webui_dir: Path | None = None,
 ) -> dict[str, Path]:
-    return {
+    routes: dict[str, Path] = {
         "/live2ds": live2ds_dir,
         "/bg": olv_dir / "backgrounds",
         "/avatars": olv_dir / "avatars",
         "/cache": runtime_cache_dir,
     }
+    if webui_dir is not None and webui_dir.exists():
+        routes["/"] = webui_dir
+    return routes
 
 
 def list_background_files(olv_dir: Path) -> list[str]:

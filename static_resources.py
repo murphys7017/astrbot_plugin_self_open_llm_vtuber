@@ -13,13 +13,21 @@ from astrbot.api import logger
 
 def _build_handler(routes: dict[str, Path]):
     normalized_routes = {prefix: path.resolve() for prefix, path in routes.items()}
+    # Sort routes so that more specific (longer) prefixes match first.
+    # This ensures "/live2ds" is checked before "/" when both are registered.
+    sorted_prefixes = sorted(
+        normalized_routes.keys(),
+        key=lambda p: -len(p),
+    )
+    root_route = normalized_routes.get("/")
 
     class StaticResourceHandler(SimpleHTTPRequestHandler):
         def translate_path(self, path: str) -> str:
             parsed_path = urlparse(path).path
             request_path = unquote(parsed_path)
 
-            for prefix, root in normalized_routes.items():
+            for prefix in sorted_prefixes:
+                root = normalized_routes[prefix]
                 if request_path == prefix or request_path.startswith(prefix + "/"):
                     relative = request_path[len(prefix) :].lstrip("/\\")
                     target = (root / relative).resolve()
@@ -27,7 +35,20 @@ def _build_handler(routes: dict[str, Path]):
                         target.relative_to(root)
                     except ValueError:
                         return str(root / "__forbidden__")
+                    # SPA fallback: if the resolved file does not exist and a
+                    # root webui route is configured, serve index.html so that
+                    # client-side routing can take over.
+                    if not target.exists() and prefix == "/" and root_route is not None:
+                        index_html = (root_route / "index.html").resolve()
+                        if index_html.exists():
+                            return str(index_html)
                     return str(target)
+
+            # No prefix matched at all – try the SPA fallback on the root route.
+            if root_route is not None:
+                index_html = (root_route / "index.html").resolve()
+                if index_html.exists():
+                    return str(index_html)
 
             return str(Path("__missing__").resolve())
 
@@ -76,6 +97,15 @@ class StaticResourceServer:
         logger.info(
             f"Desktop VTuber static resources listening on http://{self.host}:{self.port}"
         )
+        if "/" in self.routes:
+            logger.info(
+                f"WebUI available at http://{self.host}:{self.port}/"
+            )
+        else:
+            logger.info(
+                "WebUI not built – run `python build_webui.py` in the plugin "
+                "directory to build the integrated web interface."
+            )
 
     def stop(self) -> None:
         if self._server is None:

@@ -1,6 +1,6 @@
 # Alice的桌面分身（astrbot_plugin_self_open_llm_vtuber）
 
-让你的bot在桌面或者web可以看到你、看到你在干什么、“开口说话、做表情、播动作”。这个插件负责把 AstrBot 的对话结果实时变成可视化桌宠互动，支持文本输入、语音输入和语音打断。
+让你的bot在桌面或者web可以看到你、看到你在干什么、"开口说话、做表情、播动作"。这个插件负责把 AstrBot 的对话结果实时变成可视化桌宠互动，支持文本输入、语音输入和语音打断。
 
 - 前端安装包下载地址：[Release install-v1 · murphys7017/astrbot_plugin_vtb_adapter](https://github.com/murphys7017/astrbot_plugin_vtb_adapter/releases/tag/p1v0.9.8)
   - 推荐从源码构建，我只打包了win安装包
@@ -15,6 +15,7 @@
 
 - [功能特色](#功能特色)
 - [安装与启用](#安装与启用)
+- [构建集成 WebUI（推荐）](#构建集成-webui推荐)
 - [快速使用](#快速使用)
 - [常见问题](#常见问题)
 - [文档索引](#文档索引)
@@ -28,11 +29,12 @@
 
 ## 功能特色
 
-- 让 Alice 的回复变成“能听见、能看见”的桌面互动
+- 让 Alice 的回复变成"能听见、能看见"的桌面互动
 - 支持文本、图片、麦克风输入并接入 AstrBot 对话链路
 - 支持语音识别、语音播放、表情与动作联动
 - 支持语音打断，提升实时对话体验
 - 支持动态下发 Live2D 模型信息与音频 URL 播放链路
+- **内置 WebUI**：构建后可直接在浏览器中访问，无需额外安装前端
 
 ## 安装与启用
 
@@ -59,10 +61,56 @@ pip install -r requirements.txt
 - `OLV Pet Adapter websocket listening on ws://127.0.0.1:12396`
 - `Desktop VTuber static resources listening on http://127.0.0.1:12397`
 
+## 构建集成 WebUI（推荐）
+
+插件已内置前端源码（`web/` 目录），只需一条命令即可构建 WebUI，构建完成后直接在浏览器中访问，无需再单独安装或启动前端应用。
+
+### 前置要求
+
+- Node.js >= 18
+- npm
+
+### 一键构建
+
+```bash
+# 在插件根目录执行
+python build_webui.py
+```
+
+或使用 shell 脚本（Linux / macOS）：
+
+```bash
+bash build_webui.sh
+```
+
+构建完成后，WebUI 文件会被复制到插件的 `webui/` 目录。
+
+### 访问 WebUI
+
+启动 AstrBot 后，在浏览器中打开：
+
+```
+http://127.0.0.1:12397/
+```
+
+日志中会出现：
+
+```
+WebUI available at http://127.0.0.1:12397/
+```
+
+如果 AstrBot 和浏览器不在同一台机器，请将 `127.0.0.1` 替换为 AstrBot 的实际 IP。
+
+> **注意**：如果未构建 WebUI，插件仍然正常运行，只是 `http://127.0.0.1:12397/` 不会提供 Web 界面。此时可以使用独立的前端安装包或从前端仓库源码构建。
+
 ## 快速使用
 
+### 方式一：使用集成 WebUI（推荐）
 
-### 1. 启动前端
+构建完成后直接在浏览器中打开 `http://127.0.0.1:12397/` 即可使用。
+
+### 方式二：使用独立前端安装包
+
 #### 直接使用安装包
 
 由于本人只有win电脑，所以只打包了win版安装包，安装会直接安装到`%userprofile%\AppData\Local\Programs\open-llm-vtuber`，然后向开始菜单添加快捷链接。
@@ -81,25 +129,27 @@ npm install
 
 ```powershell
 # 开发模式 桌面端
-npm run dev 
+npm run dev
 # 开发模式 web
-npm run dev:web 
+npm run dev:web
 # 构建安装包
-npm run build:win # npm run build:mac  npm run build:linux 
+npm run build:win # npm run build:mac  npm run build:linux
 # 构建web
 npm run build:web
 ```
 
-### 2. 配置前端连接地址
+### 配置前端连接地址
 
 - `wsUrl`: `ws://127.0.0.1:12396`
 - `baseUrl`: `http://127.0.0.1:12397`
 
 如果前端和 AstrBot 不在同一台机器，请替换为 AstrBot 实际 IP。
 
-### 3. 开始对话
+> 集成 WebUI 已默认配置好上述地址，无需手动设置。
 
-连接成功后，前端输入会进入 AstrBot 对话链路，返回内容会以文本、音频、表情和动作形式回到前端。
+### 开始对话
+
+连接成功后，前端输入会进入 AstrBot 对话链路，返回内容会以文本、音频、表情和动作的形式回到前端。
 
 ## 常见问题
 
@@ -109,6 +159,12 @@ npm run build:web
 - 检查 `12396` / `12397` 是否被占用
 - 检查前端 `wsUrl` / `baseUrl` 是否填写正确
 - 检查防火墙与跨机器网络连通性
+
+### WebUI 无法访问
+
+- 确认已执行 `python build_webui.py` 构建 WebUI
+- 检查 `webui/` 目录是否存在且包含 `index.html`
+- 检查日志中是否出现 `WebUI available at http://...`
 
 ### 没有音频
 

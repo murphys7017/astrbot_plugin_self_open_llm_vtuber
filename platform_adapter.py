@@ -31,6 +31,7 @@ from .static_resources import StaticResourceServer
 PLUGIN_DIR = Path(__file__).resolve().parent
 LIVE2DS_DIR = PLUGIN_DIR / "live2ds"
 FRONTEND_ASSETS_DIR = PLUGIN_DIR / "olv"
+WEBUI_DIR = PLUGIN_DIR / "webui"
 PLUGIN_DATA_DIR = Path(get_astrbot_plugin_data_path()) / PLUGIN_DIR.name
 RUNTIME_CACHE_DIR = PLUGIN_DATA_DIR / "cache"
 AUDIO_CACHE_DIR = RUNTIME_CACHE_DIR / "audio"
@@ -88,6 +89,7 @@ class OLVPetPlatformAdapter(Platform):
                 live2ds_dir=LIVE2DS_DIR,
                 olv_dir=FRONTEND_ASSETS_DIR,
                 runtime_cache_dir=RUNTIME_CACHE_DIR,
+                webui_dir=WEBUI_DIR,
             ),
         )
         self.media_service = MediaService(
