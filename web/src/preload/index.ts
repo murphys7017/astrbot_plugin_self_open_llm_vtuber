@@ -1,0 +1,141 @@
+/* eslint-disable @typescript-eslint/ban-ts-comment */
+import electron from 'electron';
+const { contextBridge, ipcRenderer, desktopCapturer } = electron;
+import { electronAPI } from '@electron-toolkit/preload';
+
+declare global {
+  interface Window {
+    electron: typeof electronAPI;
+    // @ts-ignore
+    api: typeof api;
+  }
+}
+
+const api = {
+  setIgnoreMouseEvents: (ignore: boolean) => {
+    ipcRenderer.send('set-ignore-mouse-events', ignore);
+  },
+  toggleForceIgnoreMouse: () => {
+    ipcRenderer.send('toggle-force-ignore-mouse');
+  },
+  toggleDevTools: () => {
+    ipcRenderer.send('toggle-devtools');
+  },
+  onForceIgnoreMouseChanged: (callback: (isForced: boolean) => void) => {
+    const handler = (_event: any, isForced: boolean) => callback(isForced);
+    ipcRenderer.on('force-ignore-mouse-changed', handler);
+    return () => ipcRenderer.removeListener('force-ignore-mouse-changed', handler);
+  },
+  showContextMenu: () => {
+    console.log('Preload showContextMenu');
+    ipcRenderer.send('show-context-menu');
+  },
+  onModeChanged: (callback: (mode: string) => void) => {
+    const handler = (_event: any, mode: string) => callback(mode);
+    ipcRenderer.on('mode-changed', handler);
+    return () => ipcRenderer.removeListener('mode-changed', handler);
+  },
+  onMicToggle: (callback: () => void) => {
+    const handler = (_event: any) => callback();
+    ipcRenderer.on('mic-toggle', handler);
+    return () => ipcRenderer.removeListener('mic-toggle', handler);
+  },
+  onInterrupt: (callback: () => void) => {
+    const handler = (_event: any) => callback();
+    ipcRenderer.on('interrupt', handler);
+    return () => ipcRenderer.removeListener('interrupt', handler);
+  },
+  updateComponentHover: (componentId: string, isHovering: boolean) => {
+    ipcRenderer.send('update-component-hover', componentId, isHovering);
+  },
+  startPetWindowDrag: (screenX: number, screenY: number) => {
+    ipcRenderer.send('pet-window-drag-start', screenX, screenY);
+  },
+  movePetWindowDrag: (screenX: number, screenY: number) => {
+    ipcRenderer.send('pet-window-drag-move', screenX, screenY);
+  },
+  endPetWindowDrag: () => {
+    ipcRenderer.send('pet-window-drag-end');
+  },
+  setPetInputFocus: (focused: boolean) => {
+    ipcRenderer.send('pet-input-focus-changed', focused);
+  },
+  sendPetOverlayText: (payload: { text: string; timestamp?: number } | string) => {
+    ipcRenderer.send('pet-overlay-action-send-text', payload);
+  },
+  sendPetOverlayMicToggle: () => {
+    ipcRenderer.send('pet-overlay-action-mic-toggle');
+  },
+  sendPetOverlayInterrupt: () => {
+    ipcRenderer.send('pet-overlay-action-interrupt');
+  },
+  sendPetOverlayState: (state: { aiState: string; lastAIMessage: string; micOn: boolean }) => {
+    ipcRenderer.send('pet-overlay-state-update', state);
+  },
+  onPetOverlayState: (
+    callback: (state: { aiState: string; lastAIMessage: string; micOn: boolean }) => void,
+  ) => {
+    const handler = (_event: any, state: { aiState: string; lastAIMessage: string; micOn: boolean }) => callback(state);
+    ipcRenderer.on('pet-overlay-state-update', handler);
+    return () => ipcRenderer.removeListener('pet-overlay-state-update', handler);
+  },
+  onPetOverlaySendText: (callback: (payload: { text: string; timestamp?: number } | string) => void) => {
+    const handler = (_event: any, payload: { text: string; timestamp?: number } | string) => callback(payload);
+    ipcRenderer.on('pet-overlay-send-text', handler);
+    return () => ipcRenderer.removeListener('pet-overlay-send-text', handler);
+  },
+  onPetOverlayMicToggle: (callback: () => void) => {
+    const handler = (_event: any) => callback();
+    ipcRenderer.on('pet-overlay-mic-toggle', handler);
+    return () => ipcRenderer.removeListener('pet-overlay-mic-toggle', handler);
+  },
+  onPetOverlayInterrupt: (callback: () => void) => {
+    const handler = (_event: any) => callback();
+    ipcRenderer.on('pet-overlay-interrupt', handler);
+    return () => ipcRenderer.removeListener('pet-overlay-interrupt', handler);
+  },
+  setPetOverlayPreferredHeight: (height: number) => {
+    ipcRenderer.send('pet-overlay-preferred-height', height);
+  },
+  onToggleInputSubtitle: (callback: () => void) => {
+    const handler = (_event: any) => callback();
+    ipcRenderer.on('toggle-input-subtitle', handler);
+    return () => ipcRenderer.removeListener('toggle-input-subtitle', handler);
+  },
+  onToggleScrollToResize: (callback: () => void) => {
+    const handler = (_event: any) => callback();
+    ipcRenderer.on('toggle-scroll-to-resize', handler);
+    return () => ipcRenderer.removeListener('toggle-scroll-to-resize', handler);
+  },
+  setMode: (mode: 'window' | 'pet') => {
+    ipcRenderer.send('pre-mode-changed', mode);
+  },
+};
+
+if (process.contextIsolated) {
+  try {
+    contextBridge.exposeInMainWorld('electron', {
+      ...electronAPI,
+      desktopCapturer: {
+        getSources: (options) => desktopCapturer.getSources(options),
+      },
+      ipcRenderer: {
+        invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
+        on: (channel, func) => ipcRenderer.on(channel, func),
+        once: (channel, func) => ipcRenderer.once(channel, func),
+        removeListener: (channel, func) => ipcRenderer.removeListener(channel, func),
+        removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel),
+        send: (channel, ...args) => ipcRenderer.send(channel, ...args),
+      },
+      process: {
+        platform: process.platform,
+      },
+    });
+    contextBridge.exposeInMainWorld('api', api);
+  } catch (error) {
+    console.error(error);
+  }
+} else {
+  window.electron = electronAPI;
+  (window as any).api = api;
+}
